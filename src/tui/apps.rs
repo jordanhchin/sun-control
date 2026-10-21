@@ -30,6 +30,10 @@ pub struct AppsState {
     pub moving: Moving,
     /// Apps a failed reorder displaced, still to be offered for re-adding.
     pub recover: Vec<SunApp>,
+    /// The editor for a recovery save that failed, waiting to be reshown.
+    pub retry: Option<Box<AppEditor>>,
+    /// A recovery save is in flight; the next one waits for its outcome.
+    pub recovering: bool,
     /// The last app list requested; earlier responses are stale.
     pub request: u64,
 }
@@ -111,6 +115,8 @@ impl Default for AppsState {
             table: TableState::default().with_selected(Some(0)),
             moving: Moving::No,
             recover: Vec::new(),
+            retry: None,
+            recovering: false,
             request: 0,
         }
     }
@@ -280,9 +286,14 @@ impl App {
         self.load_apps();
     }
 
-    /// Open the next displaced app in the editor, if any.
+    /// Open the next displaced app in the editor, if any and nothing else is
+    /// on screen; a failed save's editor comes first, edits intact.
     pub(super) fn next_recovered_app(&mut self) {
-        if self.modal.is_some() {
+        if self.modal.is_some() || self.apps.recovering {
+            return;
+        }
+        if let Some(editor) = self.apps.retry.take() {
+            self.modal = Some(Modal::Editor(editor));
             return;
         }
         // Left queued until the server confirms it has the app again.
@@ -299,6 +310,7 @@ impl App {
             return;
         };
         self.toast(format!("Saving “{}”…", app.name), ToastKind::Info);
+        self.apps.recovering = true;
         self.spawn(async move {
             Msg::Recovered(match client.save_app(&app, None).await {
                 Ok(()) => Ok(format!("Re-added “{}”", app.name)),
@@ -308,6 +320,7 @@ impl App {
     }
 
     pub(super) fn on_recovered(&mut self, result: Result<String, (String, Box<AppEditor>)>) {
+        self.apps.recovering = false;
         match result {
             Ok(text) => {
                 self.apps.recover.pop();
@@ -319,9 +332,8 @@ impl App {
                 // Hand the edits back for another try.
                 self.toast(format!("Couldn't save: {e}"), ToastKind::Error);
                 editor.error = Some(e);
-                if self.modal.is_none() {
-                    self.modal = Some(Modal::Editor(editor));
-                }
+                self.apps.retry = Some(editor);
+                self.next_recovered_app();
             }
         }
     }

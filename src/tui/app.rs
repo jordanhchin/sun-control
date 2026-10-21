@@ -678,6 +678,8 @@ impl App {
         }
         if let Some(modal) = self.modal.take() {
             self.on_modal_key(modal, key);
+            // A recovery editor that couldn't be shown earlier waits for this.
+            self.next_recovered_app();
             return;
         }
         match key.code {
@@ -767,7 +769,6 @@ impl App {
                         // Declining to re-add is the only way to drop it.
                         self.apps.recover.pop();
                     }
-                    self.next_recovered_app();
                 }
                 EditorEvent::None => self.modal = Some(Modal::Editor(editor)),
             },
@@ -1202,5 +1203,28 @@ mod tests {
         app.on_recovered(Ok("Re-added “B”".into()));
         assert!(app.apps.recover.is_empty());
         assert!(app.modal.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_failed_recovery_waits_for_an_open_dialog_to_close() {
+        let (mut app, _rx) = app();
+        app.apps.recover.push(SunApp {
+            name: "B".into(),
+            ..Default::default()
+        });
+        app.next_recovered_app();
+        let Some(Modal::Editor(editor)) = app.modal.take() else {
+            panic!("no recovery editor");
+        };
+        app.apps.recovering = true;
+        app.modal = Some(Modal::Help);
+        app.on_recovered(Err(("HTTP 500".into(), editor)));
+        assert!(matches!(app.modal, Some(Modal::Help)));
+
+        app.on_event(crossterm::event::Event::Key(KeyEvent::from(KeyCode::Esc)));
+        let Some(Modal::Editor(editor)) = &app.modal else {
+            panic!("retry editor lost after closing help");
+        };
+        assert!(editor.recovery && editor.error.is_some());
     }
 }
