@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A terminal UI for managing Sunshine game streaming servers, locally or remotely"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/jordanhchin/sun-control"
 readme = "README.md"
 keywords = ["sunshine", "tui", "moonlight", "streaming", "ratatui"]
 categories = ["command-line-utilities"]
@@ -26,8 +27,14 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 toml = "1.1.8"
 url = "2.5.8"
+webpki-roots = "1.0.10"
 x509-parser = "0.18.1"
 
 [dev-dependencies]
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6.5"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

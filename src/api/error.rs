@@ -14,6 +14,9 @@ pub enum ApiError {
     CertificateMismatch,
     #[error("Sunshine reported an error: {0}")]
     Server(String),
+    /// A local problem while carrying out an API-backed task, e.g. writing a file.
+    #[error("{0}")]
+    Local(String),
     #[error("HTTP {status} from {path}: {body}")]
     Http {
         status: u16,

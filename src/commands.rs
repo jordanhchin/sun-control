@@ -6,16 +6,19 @@ use serde_json::Value;
 use crate::cli::{AppsCmd, ClientsCmd, Command, ConfigCmd, HostsCmd};
 use std::collections::BTreeMap;
 use sun_control::api::types::{Client, PendingPairing};
-use sun_control::api::{ApiError, SunshineClient};
+use sun_control::api::{ApiError, Credentials, SunshineClient};
 use sun_control::connect::{ConnectOptions, connect};
 
 use sun_control::devices::format_date;
 use sun_control::profiles::{self, Host, Profiles};
 use sun_control::schema::{self, Schema};
+use sun_control::update;
 
 pub async fn run(cmd: Command, profiles: &mut Profiles, opts: &ConnectOptions) -> Result<()> {
-    if let Command::Hosts(cmd) = cmd {
-        return hosts(cmd, profiles, opts).await;
+    match cmd {
+        Command::Hosts(cmd) => return hosts(cmd, profiles, opts).await,
+        Command::Update { check, force } => return self_update(check, force).await,
+        _ => {}
     }
     let conn = connect(profiles, opts).await?;
     let api = &conn.client;
@@ -55,7 +58,61 @@ pub async fn run(cmd: Command, profiles: &mut Profiles, opts: &ConnectOptions) -
             api.restart().await?;
             println!("Restart requested.");
         }
-        Command::Hosts(_) => unreachable!(),
+        Command::Permissions => {
+            let cfg = api.config().await?;
+            let platform = cfg.platform.as_deref();
+            for p in api.permissions().await? {
+                let need = if p.is_required() {
+                    "required"
+                } else {
+                    "optional"
+                };
+                println!(
+                    "{:<28} {:<16} {need}",
+                    p.label(platform),
+                    p.status.replace('_', " ")
+                );
+                if p.status != "granted"
+                    && let Some(help) = p.help(platform)
+                {
+                    println!("    {help}");
+                }
+            }
+        }
+        Command::ResetPortal => {
+            api.reset_portal_token().await?;
+            api.restart().await?;
+            println!(
+                "Portal capture reset; Sunshine is restarting and will ask you to pick a display again."
+            );
+        }
+        Command::ResetDisplay => {
+            api.reset_display_persistence().await?;
+            println!("Persistent display settings reset.");
+        }
+        Command::Passwd { new_user } => {
+            let current = api
+                .credentials()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("not signed in"))?;
+            let password = rpassword::prompt_password("New password: ")?;
+            if password.is_empty()
+                || password != rpassword::prompt_password("Confirm new password: ")?
+            {
+                bail!("the passwords are empty or don't match; nothing changed");
+            }
+            let username = new_user.unwrap_or_else(|| current.username.clone());
+            api.change_credentials(
+                &current,
+                &Credentials {
+                    username: username.clone(),
+                    password,
+                },
+            )
+            .await?;
+            println!("Admin login changed for user '{username}'.");
+        }
+        Command::Hosts(_) | Command::Update { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -332,5 +389,34 @@ async fn hosts(cmd: HostsCmd, profiles: &mut Profiles, opts: &ConnectOptions) ->
             );
         }
     }
+    Ok(())
+}
+
+async fn self_update(check: bool, force: bool) -> Result<()> {
+    let release = update::latest_release().await?;
+    let newer = update::is_newer(&release.tag_name, update::VERSION);
+    if !newer && !force {
+        println!("sun-control {} is up to date.", update::VERSION);
+        return Ok(());
+    }
+    if check {
+        println!(
+            "sun-control {} is available (you have {}).",
+            release.tag_name,
+            update::VERSION
+        );
+        if !release.html_url.is_empty() {
+            println!("Release notes: {}", release.html_url);
+        }
+        println!("Run `sun-control update` to install it.");
+        return Ok(());
+    }
+    println!(
+        "Updating sun-control {} → {}…",
+        update::VERSION,
+        release.tag_name
+    );
+    let path = update::install(&release).await?;
+    println!("Installed {} at {}.", release.tag_name, path.display());
     Ok(())
 }

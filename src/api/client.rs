@@ -9,7 +9,8 @@ use url::Url;
 use super::error::{ApiError, Result};
 use super::tls::{self, Trust};
 use super::types::{
-    App, AppList, Client, ClientList, Config, PendingPairing, PendingPairingList, Status,
+    App, AppList, Client, ClientList, Config, PendingPairing, PendingPairingList, Permission,
+    PermissionList, Status,
 };
 
 #[derive(Debug, Clone)]
@@ -41,6 +42,10 @@ impl SunshineClient {
             creds,
             seen_fingerprint: seen,
         })
+    }
+
+    pub fn credentials(&self) -> Option<&Credentials> {
+        self.creds.as_ref()
     }
 
     pub fn base_url(&self) -> &Url {
@@ -259,6 +264,18 @@ impl SunshineClient {
             Err(ApiError::Request(e)) if !e.is_status() => Ok(()),
             other => other,
         }
+    }
+
+    /// Forget the saved XDG portal capture approval (Linux). Sunshine must be
+    /// restarted afterwards, and will ask to pick a display again.
+    pub async fn reset_portal_token(&self) -> Result<()> {
+        self.action(Method::POST, "api/reset-portal-token", Some(&json!({})))
+            .await
+    }
+
+    pub async fn permissions(&self) -> Result<Vec<Permission>> {
+        let list: PermissionList = self.json(Method::GET, "api/permissions", None).await?;
+        Ok(list.permissions)
     }
 
     pub async fn reset_display_persistence(&self) -> Result<()> {

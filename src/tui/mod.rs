@@ -6,6 +6,8 @@ mod apps;
 mod config;
 mod logs;
 mod pairing;
+mod palette;
+mod system;
 mod ui;
 mod widgets;
 

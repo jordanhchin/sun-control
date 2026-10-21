@@ -113,15 +113,35 @@ def main(web: str) -> None:
                 result.append(o)
         return result or None
 
+    # Platform slots of the web UI's PlatformLayout component:
+    # `{windows:o(()=>[ ...fields... ]),linux:o(()=>[...])}`.
+    slots = []
+    for m in re.finditer(r"\b(windows|linux|macos|freebsd):[\w$]+\(\(\)=>\[", js):
+        try:
+            span = balanced(js, m.end() - 1)
+        except ValueError:
+            continue
+        slots.append((m.end() - 1, m.end() - 1 + len(span), m.group(1)))
+    all_platforms = ["windows", "linux", "macos", "freebsd"]
+
     def field_platforms(key: str):
         m = re.search(r"(?:h\(`label`,[\w$]+,f\([\w$]+\.\$t\(`config\." + re.escape(key) + r"`\)\)|id:`" + re.escape(key) + r"`)", js)
         if not m:
             return None
-        before = js[max(0, m.start() - 160) : m.start()]
-        cond = re.search(r"((?:[\w$]+\.platform===`\w+`(?:\|\|)?)+)\?\(d\(\),_\(`div`,[\w$]+,\[$", before)
-        if not cond:
-            return None
-        return re.findall(r"platform===`(\w+)`", cond.group(1))
+        # Inside a platform slot: only that platform.
+        inside = [(start, name) for start, end, name in slots if start < m.start() < end]
+        if inside:
+            return [max(inside)[1]]
+        before = js[max(0, m.start() - 500) : m.start()]
+        # `e.platform===`x`||...?(d(),_(`div`,…,[` wrapping the field.
+        cond = re.search(r"((?:[\w$]+\.platform===`\w+`(?:\|\|)?)+)\?\(d\(\),_\(`div`,[\w$]+,\[$", before[-160:])
+        if cond:
+            return re.findall(r"platform===`(\w+)`", cond.group(1))
+        # `e.platform===`macos`?b(``,!0):(…)` hides the field on that platform.
+        hidden = re.search(r"platform===`(\w+)`\?[\w$]+\(``,!0\):\(d\(\),_\(`div`,[\w$]+,\[[^\[]*$", before)
+        if hidden:
+            return [p for p in all_platforms if p != hidden.group(1)]
+        return None
 
     out_tabs = []
     for tab in tabs:

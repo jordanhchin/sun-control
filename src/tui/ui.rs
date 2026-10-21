@@ -78,6 +78,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Screen::Apps => super::apps::draw(f, app, main),
         Screen::Pairing => super::pairing::draw(f, app, main),
         Screen::Config => super::config::draw(f, app, main),
+        Screen::System => super::system::draw(f, app, main),
         Screen::Logs => draw_logs(f, app, main),
         Screen::Hosts => draw_hosts(f, app, main),
     }
@@ -86,6 +87,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match &mut app.modal {
         Some(Modal::Editor(editor)) => editor.draw(f),
         Some(Modal::Picker(picker)) => super::config::draw_picker(f, picker),
+        Some(Modal::Palette(palette)) => super::palette::draw(f, palette),
         Some(Modal::Help) => draw_help(f),
         Some(Modal::Confirm(c)) => {
             let body = Text::from(c.body.as_str());
@@ -217,7 +219,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         ]),
         Screen::Dashboard => hints(&[
             ("Enter", "retry"),
-            ("6", "hosts"),
+            ("7", "hosts"),
             ("?", "help"),
             ("q", "quit"),
         ]),
@@ -246,6 +248,14 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("u", "undo"),
             ("/", "search"),
             ("s", "save"),
+            ("q", "quit"),
+        ]),
+        Screen::System => hints(&[
+            ("Tab", "focus"),
+            ("↑↓", "select"),
+            ("Enter", "run"),
+            ("R", "refresh"),
+            ("?", "help"),
             ("q", "quit"),
         ]),
         Screen::Logs => hints(&[
@@ -280,12 +290,12 @@ pub(super) fn not_connected(f: &mut Frame, app: &App, area: Rect) {
             Line::raw(""),
             Line::styled(error.clone(), muted()),
             Line::raw(""),
-            hints(&[("Enter", "retry"), ("6", "choose another host")]),
+            hints(&[("Enter", "retry"), ("7", "choose another host")]),
         ],
         _ => vec![
             Line::from("No host selected."),
             Line::raw(""),
-            hints(&[("6", "choose a host")]),
+            hints(&[("7", "choose a host")]),
         ],
     };
     let area = centered(
@@ -397,7 +407,10 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![key(" x "), Span::raw(" Close the running app")]),
         Line::from(vec![key(" R "), Span::raw(" Refresh")]),
         Line::raw(""),
-        Line::styled("Press 4 to change Sunshine's configuration.", muted()),
+        Line::styled(
+            "Press 4 for configuration or 6 for troubleshooting.",
+            muted(),
+        ),
     ];
     f.render_widget(
         Paragraph::new(action_lines).block(pane("Actions", app.focus == 1)),
@@ -675,8 +688,9 @@ fn draw_help(f: &mut Frame) {
         item("↑↓", "move within the focused pane"),
         item("Enter / →", "open the screen chosen in the sidebar"),
         item("←", "back towards the sidebar"),
-        item("1-6", "jump straight to a screen"),
+        item("1-7", "jump straight to a screen"),
         item("R", "refresh"),
+        item("Ctrl-P / :", "command palette: find any screen or action"),
         item("?", "this help"),
         item("q / Ctrl-C", "quit"),
         Line::raw(""),
@@ -707,6 +721,9 @@ fn draw_help(f: &mut Frame) {
         item("f", "toggle follow"),
         item("l", "cycle minimum level"),
         item("/ n N Esc", "search, next, previous, clear"),
+        Line::raw(""),
+        section("System"),
+        item("Enter", "run the selected action (asks first)"),
         Line::raw(""),
         section("Hosts"),
         item("Enter", "connect"),

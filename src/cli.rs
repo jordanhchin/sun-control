@@ -66,9 +66,30 @@ pub enum Command {
     },
     /// Restart Sunshine
     Restart,
+    /// Show what Sunshine has access to (e.g. virtual input devices)
+    Permissions,
+    /// Clear the saved XDG portal capture approval and restart (Linux)
+    ResetPortal,
+    /// Reset persistent display device settings (Windows)
+    ResetDisplay,
+    /// Change the admin username and/or password
+    Passwd {
+        /// New username (default: keep the current one)
+        #[arg(long)]
+        new_user: Option<String>,
+    },
     /// Saved hosts
     #[command(subcommand)]
     Hosts(HostsCmd),
+    /// Update sun-control to the latest release
+    Update {
+        /// Only report whether an update is available
+        #[arg(long)]
+        check: bool,
+        /// Reinstall even if already up to date
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

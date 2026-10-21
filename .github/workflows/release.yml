@@ -1,5 +1,7 @@
 name: Release
 
+# Push a tag like v0.2.0 (matching the version in Cargo.toml) to publish a
+# release with static Linux binaries, checksums and the installer.
 on:
   push:
     tags: ["v*"]
@@ -7,21 +9,71 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match Cargo.toml version $version"
+            exit 1
+          fi
+
   build:
+    needs: check-version
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          - arch: x86_64
             os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
+          - arch: aarch64
             os: ubuntu-24.04-arm
     runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.arch }}-unknown-linux-musl
+      ASSET: sun-control-${{ matrix.arch }}-linux
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release --target ${{ matrix.target }}
-      - run: tar -czf sun-control-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release sun-control
+        with:
+          targets: ${{ env.TARGET }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --target "$TARGET"
+      - run: cargo build --release --target "$TARGET"
+      - name: Package
+        run: |
+          mkdir dist pkg
+          cp "target/$TARGET/release/sun-control" "dist/$ASSET"
+          ./"dist/$ASSET" --version
+          cp "target/$TARGET/release/sun-control" README.md LICENSE-MIT LICENSE-APACHE pkg/
+          tar -czf "dist/$ASSET.tar.gz" -C pkg .
+          cd dist
+          sha256sum "$ASSET" > "$ASSET.sha256"
+          sha256sum "$ASSET.tar.gz" > "$ASSET.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: sun-control-*.tar.gz
+          generate_release_notes: true
+          files: |
+            dist/*
+            install.sh

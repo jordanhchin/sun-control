@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::TableState;
-use sun_control::api::{ApiError, SunshineClient};
+use sun_control::api::{ApiError, Credentials, SunshineClient};
 use sun_control::connect::{ConnectError, ConnectOptions, Connection, connect};
 use sun_control::profiles::{self, Host, Profiles};
 use tokio::sync::mpsc::UnboundedSender;
@@ -15,9 +15,11 @@ use super::apps::AppsState;
 use super::config::{ConfigState, Picker};
 use super::logs::LogsState;
 use super::pairing::{PAIRING_REFRESH, PairingState};
+use super::palette::Palette;
+use super::system::SystemState;
 use super::widgets::{Field, Form, FormEvent, Input};
 use sun_control::api::types::Config;
-use sun_control::api::types::{App as SunApp, Client, PendingPairing};
+use sun_control::api::types::{App as SunApp, Client, PendingPairing, Permission};
 use sun_control::schema::Schema;
 
 const DASHBOARD_REFRESH: Duration = Duration::from_secs(15);
@@ -31,6 +33,7 @@ pub enum Screen {
     Pairing,
     Config,
     Logs,
+    System,
     Hosts,
 }
 
@@ -38,17 +41,18 @@ impl Screen {
     /// Focusable panes on this screen, besides the sidebar.
     pub fn panes(self) -> usize {
         match self {
-            Screen::Pairing | Screen::Config => 2,
+            Screen::Pairing | Screen::Config | Screen::System => 2,
             _ => 1,
         }
     }
 
-    pub const ALL: [Screen; 6] = [
+    pub const ALL: [Screen; 7] = [
         Screen::Dashboard,
         Screen::Apps,
         Screen::Pairing,
         Screen::Config,
         Screen::Logs,
+        Screen::System,
         Screen::Hosts,
     ];
 
@@ -58,6 +62,7 @@ impl Screen {
             Screen::Apps => "Apps",
             Screen::Pairing => "Pairing",
             Screen::Config => "Config",
+            Screen::System => "System",
             Screen::Logs => "Logs",
             Screen::Hosts => "Hosts",
         }
@@ -102,6 +107,8 @@ pub enum Action {
     CancelPairing { id: String, label: String },
     SaveConfig,
     Quit,
+    ResetPortal,
+    ResetDisplay,
 }
 
 pub struct Confirm {
@@ -118,6 +125,8 @@ pub enum FormKind {
     Pair { pairing_id: Option<String> },
     ConfigValue { key: String },
     ConfigSearch,
+    ExportLogs,
+    ChangeLogin,
 }
 
 pub enum Modal {
@@ -125,6 +134,7 @@ pub enum Modal {
     Form(Form<FormKind>),
     Editor(Box<AppEditor>),
     Picker(Picker),
+    Palette(Box<Palette>),
     Help,
 }
 
@@ -154,6 +164,8 @@ pub enum Msg {
     },
     Config(Result<Config, ApiError>),
     ConfigSaved(Result<(), ApiError>),
+    Permissions(Result<Vec<Permission>, ApiError>),
+    LoginChanged(Result<Credentials, ApiError>),
     /// A finished action; an empty message refreshes without a toast.
     Done(Result<String, String>),
 }
@@ -173,6 +185,7 @@ pub struct App {
     pub pairing: PairingState,
     pub schema: Schema,
     pub config: ConfigState,
+    pub system: SystemState,
     pub hosts: TableState,
     pub modal: Option<Modal>,
     pub toast: Option<Toast>,
@@ -199,6 +212,7 @@ impl App {
             pairing: PairingState::default(),
             schema: Schema::load(),
             config: ConfigState::default(),
+            system: SystemState::default(),
             hosts,
             modal: None,
             toast: None,
@@ -246,6 +260,7 @@ impl App {
         self.apps = AppsState::default();
         self.pairing = PairingState::default();
         self.config = ConfigState::default();
+        self.system = SystemState::default();
         // Server details double as the credential check, whatever the screen.
         self.load_info();
         if self.screen != Screen::Dashboard {
@@ -258,9 +273,21 @@ impl App {
         self.info = Load::Idle;
     }
 
-    pub fn connect_to(&mut self, host: &str) {
+    pub(super) fn connect_to(&mut self, host: &str) {
         let opts = ConnectOptions {
             host: Some(host.to_owned()),
+            insecure: self.insecure,
+            ..Default::default()
+        };
+        self.start_connect(opts);
+    }
+
+    /// Reconnect to `host` with explicit credentials, e.g. after changing them.
+    pub(super) fn reconnect_with(&mut self, host: String, creds: Credentials) {
+        let opts = ConnectOptions {
+            host: Some(host),
+            username: Some(creds.username),
+            password: Some(creds.password),
             insecure: self.insecure,
             ..Default::default()
         };
@@ -290,6 +317,7 @@ impl App {
             Screen::Apps => self.load_apps(),
             Screen::Pairing => self.load_pairing(),
             Screen::Config => self.load_config(),
+            Screen::System => self.load_system(),
             Screen::Dashboard | Screen::Hosts => self.load_info(),
         }
     }
@@ -379,6 +407,15 @@ impl App {
                 Ok("Unpaired all devices".into())
             }),
             Action::SaveConfig => self.save_config(),
+            Action::ResetPortal => self.run_api(|c| async move {
+                c.reset_portal_token().await?;
+                c.restart().await?;
+                Ok("Portal capture reset; Sunshine is restarting".into())
+            }),
+            Action::ResetDisplay => self.run_api(|c| async move {
+                c.reset_display_persistence().await?;
+                Ok("Reset persistent display settings".into())
+            }),
             Action::Quit => self.quit = true,
             Action::CancelPairing { id, label } => self.run_api(move |c| async move {
                 c.cancel_pairing(&id).await?;
@@ -467,6 +504,8 @@ impl App {
             Msg::Pairing { pending, clients } => self.pairing.set(pending, clients),
             Msg::Config(result) => self.on_config(result),
             Msg::ConfigSaved(result) => self.on_config_saved(result),
+            Msg::Permissions(result) => self.on_permissions(result),
+            Msg::LoginChanged(result) => self.on_login_changed(result),
             Msg::Done(Ok(text)) => {
                 if !text.is_empty() {
                     self.toast(text, ToastKind::Info);
@@ -579,6 +618,10 @@ impl App {
             }
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('?') => self.modal = Some(Modal::Help),
+            KeyCode::Char(':') => self.modal = Some(Modal::Palette(Box::new(Palette::new(self)))),
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.modal = Some(Modal::Palette(Box::new(Palette::new(self))))
+            }
             KeyCode::Char(c @ '1'..='9') => {
                 if let Some(s) = Screen::ALL.get(c as usize - '1' as usize) {
                     self.switch(*s);
@@ -609,6 +652,7 @@ impl App {
                 Screen::Apps => self.apps_key(key),
                 Screen::Pairing => self.pairing_key(key),
                 Screen::Config => self.config_key(key),
+                Screen::System => self.system_key(key),
                 Screen::Logs => self.logs_key(key),
                 Screen::Hosts => self.hosts_key(key),
             },
@@ -623,7 +667,7 @@ impl App {
         self.switch(Screen::ALL[(i + by) % Screen::ALL.len()]);
     }
 
-    fn switch(&mut self, screen: Screen) {
+    pub(super) fn switch(&mut self, screen: Screen) {
         if self.screen != screen {
             self.screen = screen;
             if screen == Screen::Hosts
@@ -640,6 +684,7 @@ impl App {
         match modal {
             Modal::Help => {}
             Modal::Picker(picker) => self.picker_key(picker, key),
+            Modal::Palette(palette) => self.palette_key(*palette, key),
             Modal::Editor(mut editor) => match editor.handle(key) {
                 EditorEvent::Save => self.save_editor(editor),
                 EditorEvent::Cancel => {}
@@ -672,6 +717,8 @@ impl App {
     fn submit_form(&mut self, form: Form<FormKind>) {
         match form.kind.clone() {
             FormKind::Pair { .. } => self.submit_pair(form),
+            FormKind::ExportLogs => self.submit_export_logs(form),
+            FormKind::ChangeLogin => self.submit_change_login(form),
             FormKind::ConfigValue { key } => {
                 let value = form.fields[0].input.value.clone();
                 if let Err(e) = self.set_config_value(&key, value) {

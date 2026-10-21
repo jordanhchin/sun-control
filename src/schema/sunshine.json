@@ -371,7 +371,10 @@
      "label": "Virtual Sink",
      "kind": "text",
      "default": "",
-     "desc": "Manually specify a virtual audio device to use. If unset, the device is chosen automatically. We strongly recommend leaving this field blank to use automatic device selection!"
+     "desc": "Manually specify a virtual audio device to use. If unset, the device is chosen automatically. We strongly recommend leaving this field blank to use automatic device selection!",
+     "platforms": [
+      "windows"
+     ]
     },
     {
      "key": "stream_audio",
@@ -385,20 +388,31 @@
      "label": "Install Steam Audio Drivers",
      "kind": "toggle",
      "default": "enabled",
-     "desc": "If Steam is installed, this will automatically install the Steam Streaming Speakers driver to support 5.1/7.1 surround sound and muting host audio."
+     "desc": "If Steam is installed, this will automatically install the Steam Streaming Speakers driver to support 5.1/7.1 surround sound and muting host audio.",
+     "platforms": [
+      "windows"
+     ]
     },
     {
      "key": "external_audio",
      "label": "Externally Managed Audio",
      "kind": "toggle",
      "default": "disabled",
-     "desc": "Capture only the configured Audio Sink without changing Windows defaults or device formats. Requires an explicit Audio Sink. Virtual Sink selection, automatic Steam audio driver installation, and Moonlight's host-playback toggle are ignored; manage playback and application routing in your audio mixer."
+     "desc": "Capture only the configured Audio Sink without changing Windows defaults or device formats. Requires an explicit Audio Sink. Virtual Sink selection, automatic Steam audio driver installation, and Moonlight's host-playback toggle are ignored; manage playback and application routing in your audio mixer.",
+     "platforms": [
+      "windows"
+     ]
     },
     {
      "key": "adapter_name",
      "label": "Adapter Name",
      "kind": "text",
-     "default": ""
+     "default": "",
+     "platforms": [
+      "windows",
+      "linux",
+      "freebsd"
+     ]
     },
     {
      "key": "output_name",
@@ -410,7 +424,10 @@
      "key": "dd_configuration_option",
      "label": "Device configuration",
      "kind": "toggle",
-     "default": "disabled"
+     "default": "disabled",
+     "platforms": [
+      "windows"
+     ]
     },
     {
      "key": "dd_resolution_option",
@@ -430,13 +447,19 @@
        "value": "manual",
        "label": "Use manually entered resolution"
       }
+     ],
+     "platforms": [
+      "windows"
      ]
     },
     {
      "key": "dd_manual_resolution",
      "label": "Manual resolution",
      "kind": "text",
-     "default": ""
+     "default": "",
+     "platforms": [
+      "windows"
+     ]
     },
     {
      "key": "dd_refresh_rate_option",
@@ -456,13 +479,19 @@
        "value": "manual",
        "label": "Use manually entered refresh rate"
       }
+     ],
+     "platforms": [
+      "windows"
      ]
     },
     {
      "key": "dd_manual_refresh_rate",
      "label": "Manual refresh rate",
      "kind": "text",
-     "default": ""
+     "default": "",
+     "platforms": [
+      "windows"
+     ]
     },
     {
      "key": "dd_hdr_option",
@@ -478,27 +507,39 @@
        "value": "auto",
        "label": "Switch on/off the HDR mode as requested by the client (default)"
       }
+     ],
+     "platforms": [
+      "windows"
      ]
     },
     {
      "key": "dd_wa_hdr_toggle_delay",
      "label": "High-contrast workaround for HDR",
      "kind": "number",
-     "default": 0
+     "default": 0,
+     "platforms": [
+      "windows"
+     ]
     },
     {
      "key": "dd_config_revert_delay",
      "label": "Config revert delay",
      "kind": "number",
      "default": 3000.0,
-     "desc": "Additional delay in milliseconds to wait before reverting configuration when the app has been closed or the last session terminated. Main purpose is to provide a smoother transition when quickly switching between apps."
+     "desc": "Additional delay in milliseconds to wait before reverting configuration when the app has been closed or the last session terminated. Main purpose is to provide a smoother transition when quickly switching between apps.",
+     "platforms": [
+      "windows"
+     ]
     },
     {
      "key": "dd_config_revert_on_disconnect",
      "label": "Config revert on disconnect",
      "kind": "toggle",
      "default": "disabled",
-     "desc": "Revert configuration upon disconnect of all clients instead of app close or last session termination."
+     "desc": "Revert configuration upon disconnect of all clients instead of app close or last session termination.",
+     "platforms": [
+      "windows"
+     ]
     },
     {
      "key": "dd_mode_remapping",
@@ -791,6 +832,11 @@
        "value": "wgc",
        "label": "Windows.Graphics.Capture (beta)"
       }
+     ],
+     "platforms": [
+      "windows",
+      "linux",
+      "freebsd"
      ]
     },
     {

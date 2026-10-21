@@ -149,6 +149,69 @@ pub struct PendingPairingList {
     pub pairings: Vec<PendingPairing>,
 }
 
+/// Something Sunshine needs access to, e.g. `/dev/uinput` for input.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Permission {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub required: Value,
+    /// `granted`, `denied`, `not_determined`, `on_use` or `unknown`.
+    #[serde(default)]
+    pub status: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Permission {
+    pub fn is_required(&self) -> bool {
+        truthy(&self.required)
+    }
+
+    pub fn label(&self, platform: Option<&str>) -> String {
+        let unix = matches!(platform, Some("linux" | "freebsd"));
+        match self.id.as_str() {
+            "screen_recording" => "Screen recording".into(),
+            "input" if unix => "Virtual input devices".into(),
+            "input" => "Keyboard and mouse control".into(),
+            "config_directory" => "Configuration directory".into(),
+            "microphone" => "Microphone".into(),
+            "system_audio" => "System audio recording".into(),
+            "local_network" => "Local network".into(),
+            "notifications" => "Notifications".into(),
+            other => {
+                let mut s = other.replace('_', " ");
+                if let Some(c) = s.get_mut(..1) {
+                    c.make_ascii_uppercase();
+                }
+                s
+            }
+        }
+    }
+
+    /// How to fix a missing permission, where Sunshine documents it.
+    pub fn help(&self, platform: Option<&str>) -> Option<&'static str> {
+        Some(match (self.id.as_str(), platform) {
+            ("input", Some("linux")) => {
+                "Allow Sunshine's user read and write access to /dev/uinput (or /dev/input/uinput); check the device's group and udev rules. After adding the user to a group, log out and back in before restarting Sunshine."
+            }
+            ("input", Some("freebsd")) => {
+                "Add Sunshine's user to the input group (pw groupmod input -m USER), then log out and back in before restarting Sunshine."
+            }
+            ("config_directory", _) => {
+                "Give the account running Sunshine permission to list and create files in its config directory."
+            }
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PermissionList {
+    #[serde(default)]
+    pub permissions: Vec<Permission>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ClientList {
     #[serde(default)]
