@@ -4,8 +4,10 @@ use anyhow::{Result, bail};
 use serde_json::Value;
 
 use crate::cli::{AppsCmd, ClientsCmd, Command, ConfigCmd, HostsCmd};
-use sun_control::api::SunshineClient;
+use sun_control::api::types::{Client, PendingPairing};
+use sun_control::api::{ApiError, SunshineClient};
 use sun_control::connect::{ConnectOptions, connect};
+use sun_control::devices::format_date;
 use sun_control::profiles::{self, Host, Profiles};
 
 pub async fn run(cmd: Command, profiles: &mut Profiles, opts: &ConnectOptions) -> Result<()> {
@@ -21,9 +23,15 @@ pub async fn run(cmd: Command, profiles: &mut Profiles, opts: &ConnectOptions) -
             println!("version   {}", cfg.version.as_deref().unwrap_or("unknown"));
             println!("platform  {}", cfg.platform.as_deref().unwrap_or("unknown"));
         }
-        Command::Pair { pin, name } => {
-            api.pair(&pin, &name).await?;
-            println!("Paired '{name}'.");
+        Command::Pair { pin, name, device } => {
+            let id = match api.pending_pairings().await {
+                Ok(pending) => Some(pick_pending(&pending, device.as_deref())?.id.clone()),
+                // Older Sunshine pairs whichever device is waiting.
+                Err(ApiError::Unsupported(_)) => None,
+                Err(e) => return Err(e.into()),
+            };
+            api.pair(&pin, &name, id.as_deref()).await?;
+            println!("Paired '{name}'. Check Moonlight to continue.");
         }
         Command::Clients(cmd) => clients(cmd, api).await?,
         Command::Apps(cmd) => apps(cmd, api).await?,
@@ -49,33 +57,105 @@ pub async fn run(cmd: Command, profiles: &mut Profiles, opts: &ConnectOptions) -
     Ok(())
 }
 
+fn find_client<'a>(list: &'a [Client], query: &str) -> Result<&'a Client> {
+    let matches: Vec<_> = list
+        .iter()
+        .filter(|c| c.uuid == query || c.name == query)
+        .collect();
+    match matches.as_slice() {
+        [c] => Ok(c),
+        [] => bail!("no paired client matches '{query}'"),
+        _ => bail!("'{query}' matches several clients; use the UUID"),
+    }
+}
+
+/// Choose the pending pairing request to answer.
+fn pick_pending<'a>(
+    pending: &'a [PendingPairing],
+    query: Option<&str>,
+) -> Result<&'a PendingPairing> {
+    match (pending, query) {
+        ([], _) => bail!("no devices are waiting to pair; start pairing in Moonlight first"),
+        ([only], None) => Ok(only),
+        (_, None) => bail!(
+            "several devices are waiting to pair; choose one with --device:\n{}",
+            pending
+                .iter()
+                .map(|p| format!("  {}  {}", p.id, p.label()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+        (_, Some(q)) => pending
+            .iter()
+            .find(|p| p.id == q || p.name == q || p.address == q)
+            .ok_or_else(|| {
+                anyhow::anyhow!("no waiting device matches '{q}' (see `clients pending`)")
+            }),
+    }
+}
+
 async fn clients(cmd: ClientsCmd, api: &SunshineClient) -> Result<()> {
     match cmd {
         ClientsCmd::List => {
-            for c in api.clients().await? {
-                println!("{:<36}  {}", c.uuid, c.name);
+            let mut list = api.clients().await?;
+            list.sort_by_key(|c| (c.name.to_lowercase(), c.created()));
+            if list.is_empty() {
+                println!("No paired clients.");
+            } else {
+                println!("{:<36}  {:<10}  NAME", "UUID", "ID CREATED");
+            }
+            for c in list {
+                let state = match c.enabled() {
+                    Some(false) => "  (disabled)",
+                    _ => "",
+                };
+                let created = c.created().map(format_date).unwrap_or_else(|| "-".into());
+                println!("{:<36}  {created:<10}  {}{state}", c.uuid, c.name);
             }
         }
+        ClientsCmd::Pending => {
+            let pending = api.pending_pairings().await?;
+            if pending.is_empty() {
+                println!("No devices are waiting to pair.");
+            }
+            for p in pending {
+                println!("{:<12}  {}", p.id, p.label());
+            }
+        }
+        ClientsCmd::Cancel { device } => {
+            let pending = api.pending_pairings().await?;
+            let p = pick_pending(&pending, Some(&device))?;
+            api.cancel_pairing(&p.id).await?;
+            println!("Cancelled pairing request from {}.", p.label());
+        }
+        ClientsCmd::Enable { client } => set_enabled(api, &client, true).await?,
+        ClientsCmd::Disable { client } => set_enabled(api, &client, false).await?,
         ClientsCmd::Unpair { client } => {
             let list = api.clients().await?;
-            let matches: Vec<_> = list
-                .iter()
-                .filter(|c| c.uuid == client || c.name == client)
-                .collect();
-            match matches.as_slice() {
-                [c] => {
-                    api.unpair(&c.uuid).await?;
-                    println!("Unpaired '{}'.", c.name);
-                }
-                [] => bail!("no paired client matches '{client}'"),
-                _ => bail!("'{client}' matches several clients; use the UUID"),
-            }
+            let c = find_client(&list, &client)?;
+            api.unpair(&c.uuid).await?;
+            println!(
+                "Unpaired '{}'. If it is still streaming, close the running app to end the session.",
+                c.name
+            );
         }
         ClientsCmd::UnpairAll => {
             api.unpair_all().await?;
             println!("Unpaired all clients.");
         }
     }
+    Ok(())
+}
+
+async fn set_enabled(api: &SunshineClient, query: &str, enabled: bool) -> Result<()> {
+    let list = api.clients().await?;
+    let c = find_client(&list, query)?;
+    api.set_client_enabled(&c.uuid, enabled).await?;
+    println!(
+        "{} '{}'.",
+        if enabled { "Enabled" } else { "Disabled" },
+        c.name
+    );
     Ok(())
 }
 

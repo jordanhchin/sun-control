@@ -2,4 +2,5 @@
 
 pub mod api;
 pub mod connect;
+pub mod devices;
 pub mod profiles;

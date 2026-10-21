@@ -10,20 +10,20 @@ use super::app::{App, ConnState, FormKind, Load, Modal, Screen, ToastKind};
 use super::logs::{Level, LogStatus};
 use super::widgets::{Form, centered};
 
-const ACCENT: Color = Color::Yellow;
-const MUTED: Color = Color::DarkGray;
-const OK: Color = Color::Green;
-const BAD: Color = Color::Red;
+pub(super) const ACCENT: Color = Color::Yellow;
+pub(super) const MUTED: Color = Color::DarkGray;
+pub(super) const OK: Color = Color::Green;
+pub(super) const BAD: Color = Color::Red;
 
-fn muted() -> Style {
+pub(super) fn muted() -> Style {
     Style::new().fg(MUTED)
 }
 
-fn key(k: &str) -> Span<'_> {
+pub(super) fn key(k: &str) -> Span<'_> {
     Span::styled(k, Style::new().fg(ACCENT).add_modifier(Modifier::BOLD))
 }
 
-fn hints<'a>(pairs: &[(&'a str, &'a str)]) -> Line<'a> {
+pub(super) fn hints<'a>(pairs: &[(&'a str, &'a str)]) -> Line<'a> {
     let mut spans = vec![Span::raw(" ")];
     for (i, (k, label)) in pairs.iter().enumerate() {
         if i > 0 {
@@ -35,7 +35,7 @@ fn hints<'a>(pairs: &[(&'a str, &'a str)]) -> Line<'a> {
     Line::from(spans)
 }
 
-fn card(title: &str) -> Block<'_> {
+pub(super) fn card(title: &str) -> Block<'_> {
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(muted())
@@ -56,12 +56,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_nav(f, app, nav);
     match app.screen {
         Screen::Dashboard => draw_dashboard(f, app, main),
+        Screen::Apps => super::apps::draw(f, app, main),
+        Screen::Pairing => super::pairing::draw(f, app, main),
         Screen::Logs => draw_logs(f, app, main),
         Screen::Hosts => draw_hosts(f, app, main),
     }
     draw_footer(f, app, footer);
 
-    match &app.modal {
+    match &mut app.modal {
+        Some(Modal::Editor(editor)) => editor.draw(f),
         Some(Modal::Help) => draw_help(f),
         Some(Modal::Confirm(c)) => {
             let body = Text::from(c.body.as_str());
@@ -85,7 +88,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn modal_block(title: &str) -> Block<'_> {
+pub(super) fn modal_block(title: &str) -> Block<'_> {
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(ACCENT))
@@ -182,7 +185,24 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         ]),
         Screen::Dashboard => hints(&[
             ("Enter", "retry"),
-            ("3", "hosts"),
+            ("5", "hosts"),
+            ("?", "help"),
+            ("q", "quit"),
+        ]),
+        Screen::Apps => hints(&[
+            ("Enter", "edit"),
+            ("a", "add"),
+            ("c", "duplicate"),
+            ("d", "delete"),
+            ("J/K", "move"),
+            ("?", "help"),
+            ("q", "quit"),
+        ]),
+        Screen::Pairing => hints(&[
+            ("↑↓", "select"),
+            ("p", "pair"),
+            ("Enter", "pair/toggle"),
+            ("d", "unpair/cancel"),
             ("?", "help"),
             ("q", "quit"),
         ]),
@@ -207,7 +227,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(line, area);
 }
 
-fn not_connected(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn not_connected(f: &mut Frame, app: &App, area: Rect) {
     let lines: Vec<Line> = match &app.conn {
         ConnState::Connecting(h) => vec![Line::from(format!("Connecting to {h}…"))],
         ConnState::Failed { host, error } => vec![
@@ -218,12 +238,12 @@ fn not_connected(f: &mut Frame, app: &App, area: Rect) {
             Line::raw(""),
             Line::styled(error.clone(), muted()),
             Line::raw(""),
-            hints(&[("Enter", "retry"), ("3", "choose another host")]),
+            hints(&[("Enter", "retry"), ("5", "choose another host")]),
         ],
         _ => vec![
             Line::from("No host selected."),
             Line::raw(""),
-            hints(&[("3", "choose a host")]),
+            hints(&[("5", "choose a host")]),
         ],
     };
     let area = centered(
@@ -239,7 +259,7 @@ fn not_connected(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn row<'a>(label: &'a str, value: impl Into<Span<'a>>) -> Line<'a> {
+pub(super) fn row<'a>(label: &'a str, value: impl Into<Span<'a>>) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("{label:<16}"), muted()),
         value.into(),
@@ -335,10 +355,7 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![key(" x "), Span::raw(" Close the running app")]),
         Line::from(vec![key(" R "), Span::raw(" Refresh")]),
         Line::raw(""),
-        Line::styled(
-            "Apps, pairing and configuration screens are coming next.",
-            muted(),
-        ),
+        Line::styled("Configuration editing is coming next.", muted()),
     ];
     f.render_widget(Paragraph::new(action_lines).block(card("Actions")), actions);
 }
@@ -568,13 +585,12 @@ fn draw_form(f: &mut Frame, form: &Form<FormKind>) {
             if focused { "› " } else { "  " },
             Style::new().fg(ACCENT),
         )];
-        value.push(Span::raw(field.input.display()));
-        if focused {
-            value.push(Span::styled(
-                "█",
-                Style::new().fg(ACCENT).add_modifier(Modifier::SLOW_BLINK),
-            ));
-        }
+        value.extend(
+            field
+                .input
+                .line(inner.width.saturating_sub(3) as usize, focused)
+                .spans,
+        );
         lines.push(Line::from(value));
     }
     if let Some(note) = &form.note {
@@ -605,7 +621,7 @@ fn draw_help(f: &mut Frame) {
     };
     let lines = vec![
         section("Global"),
-        item("1-3 / Tab", "switch screen"),
+        item("1-5 / Tab", "switch screen"),
         item("R", "refresh"),
         item("?", "this help"),
         item("q / Ctrl-C", "quit"),
@@ -613,6 +629,16 @@ fn draw_help(f: &mut Frame) {
         section("Dashboard"),
         item("r", "restart Sunshine"),
         item("x", "close the running app"),
+        Line::raw(""),
+        section("Apps"),
+        item("Enter / e", "edit (Ctrl-S saves, Esc cancels)"),
+        item("a / c / d", "add / duplicate / delete"),
+        item("J / K", "move down / up"),
+        Line::raw(""),
+        section("Pairing"),
+        item("p", "pair a waiting device with its PIN"),
+        item("Enter / Space", "pair, or enable/disable a device"),
+        item("d / D", "unpair (or cancel request) / unpair all"),
         Line::raw(""),
         section("Logs"),
         item("j/k ↑↓ PgUp/Dn", "scroll"),

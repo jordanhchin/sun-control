@@ -8,7 +8,9 @@ use url::Url;
 
 use super::error::{ApiError, Result};
 use super::tls::{self, Trust};
-use super::types::{App, AppList, Client, ClientList, Config, Status};
+use super::types::{
+    App, AppList, Client, ClientList, Config, PendingPairing, PendingPairingList, Status,
+};
 
 #[derive(Debug, Clone)]
 pub struct Credentials {
@@ -59,9 +61,9 @@ impl SunshineClient {
             .send()
             .await
             .map_err(|e| self.map_send_error(e))?;
-        Ok(self
-            .seen_fingerprint()
-            .expect("handshake records fingerprint"))
+        self.seen_fingerprint().ok_or_else(|| {
+            ApiError::Server(format!("{} did not present a TLS certificate", self.base))
+        })
     }
 
     fn map_send_error(&self, e: reqwest::Error) -> ApiError {
@@ -185,7 +187,8 @@ impl SunshineClient {
     }
 
     pub async fn clients(&self) -> Result<Vec<Client>> {
-        let list: ClientList = self.json(Method::GET, "api/clients/list", None).await?;
+        let mut list: ClientList = self.json(Method::GET, "api/clients/list", None).await?;
+        crate::devices::enrich(&mut list.named_certs, &self.base);
         Ok(list.named_certs)
     }
 
@@ -203,11 +206,42 @@ impl SunshineClient {
             .await
     }
 
-    pub async fn pair(&self, pin: &str, name: &str) -> Result<()> {
+    /// Devices currently waiting to pair. Returns [`ApiError::Unsupported`] on
+    /// Sunshine versions that pair by PIN alone.
+    pub async fn pending_pairings(&self) -> Result<Vec<PendingPairing>> {
+        let list: PendingPairingList = self.json(Method::GET, "api/pin", None).await?;
+        Ok(list.pairings)
+    }
+
+    /// Complete pairing with the PIN Moonlight shows. `pairing_id` selects a
+    /// pending request on Sunshine versions that track them.
+    pub async fn pair(&self, pin: &str, name: &str, pairing_id: Option<&str>) -> Result<()> {
+        let mut body = json!({ "pin": pin, "name": name });
+        if let Some(id) = pairing_id {
+            body["pairing_id"] = json!(id);
+        }
+        match self.action(Method::POST, "api/pin", Some(&body)).await {
+            Err(ApiError::Server(e)) if e.ends_with(" failed") => Err(ApiError::Server(
+                "pairing failed; check that the PIN is typed correctly".into(),
+            )),
+            other => other,
+        }
+    }
+
+    pub async fn cancel_pairing(&self, pairing_id: &str) -> Result<()> {
+        self.action(
+            Method::DELETE,
+            "api/pin",
+            Some(&json!({ "pairing_id": pairing_id })),
+        )
+        .await
+    }
+
+    pub async fn set_client_enabled(&self, uuid: &str, enabled: bool) -> Result<()> {
         self.action(
             Method::POST,
-            "api/pin",
-            Some(&json!({ "pin": pin, "name": name })),
+            "api/clients/update",
+            Some(&json!({ "uuid": uuid, "enabled": enabled })),
         )
         .await
     }

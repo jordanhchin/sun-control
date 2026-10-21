@@ -2,45 +2,82 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
 #[derive(Debug, Clone, Default)]
 pub struct Input {
     pub value: String,
     pub masked: bool,
+    /// Cursor position in characters.
+    cursor: usize,
 }
 
 impl Input {
     pub fn new(value: impl Into<String>) -> Self {
+        let value = value.into();
+        let cursor = value.chars().count();
         Self {
-            value: value.into(),
+            value,
             masked: false,
+            cursor,
         }
     }
 
     pub fn masked() -> Self {
         Self {
-            value: String::new(),
             masked: true,
+            ..Self::default()
         }
     }
 
-    /// Returns true if the key edited the input.
+    fn byte_at(&self, char_idx: usize) -> usize {
+        self.value
+            .char_indices()
+            .nth(char_idx)
+            .map_or(self.value.len(), |(i, _)| i)
+    }
+
+    /// Returns true if the key was handled.
     pub fn handle(&mut self, key: KeyEvent) -> bool {
+        let len = self.value.chars().count();
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.value.clear()
+            KeyCode::Char('u') if ctrl => {
+                let at = self.byte_at(self.cursor);
+                self.value.replace_range(..at, "");
+                self.cursor = 0;
             }
-            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let trimmed = self.value.trim_end().len();
-                let cut = self.value[..trimmed].rfind(' ').map(|i| i + 1).unwrap_or(0);
-                self.value.truncate(cut);
+            KeyCode::Char('w') if ctrl => {
+                let before: String = self.value.chars().take(self.cursor).collect();
+                let trimmed = before.trim_end();
+                let keep = trimmed.rfind(' ').map(|i| i + 1).unwrap_or(0);
+                let keep_chars = before[..keep].chars().count();
+                let (from, to) = (self.byte_at(keep_chars), self.byte_at(self.cursor));
+                self.value.replace_range(from..to, "");
+                self.cursor = keep_chars;
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.value.push(c)
+            KeyCode::Char('a') if ctrl => self.cursor = 0,
+            KeyCode::Char('e') if ctrl => self.cursor = len,
+            KeyCode::Char(c) if !ctrl => {
+                let at = self.byte_at(self.cursor);
+                self.value.insert(at, c);
+                self.cursor += 1;
             }
-            KeyCode::Backspace => {
-                self.value.pop();
+            KeyCode::Backspace if self.cursor > 0 => {
+                self.cursor -= 1;
+                let at = self.byte_at(self.cursor);
+                self.value.remove(at);
             }
+            KeyCode::Delete if self.cursor < len => {
+                let at = self.byte_at(self.cursor);
+                self.value.remove(at);
+            }
+            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Right => self.cursor = (self.cursor + 1).min(len),
+            KeyCode::Home => self.cursor = 0,
+            KeyCode::End => self.cursor = len,
+            KeyCode::Backspace | KeyCode::Delete => {}
             _ => return false,
         }
         true
@@ -52,6 +89,34 @@ impl Input {
         } else {
             self.value.clone()
         }
+    }
+
+    /// Render into `width` columns, scrolling horizontally to keep the cursor visible.
+    pub fn line(&self, width: usize, focused: bool) -> Line<'static> {
+        let chars: Vec<char> = self.display().chars().collect();
+        let width = width.max(2);
+        if !focused {
+            let shown: String = if chars.len() > width {
+                chars[..width - 1].iter().collect::<String>() + "…"
+            } else {
+                chars.iter().collect()
+            };
+            return Line::raw(shown);
+        }
+        let start = (self.cursor + 1).saturating_sub(width);
+        let end = (start + width).min(chars.len());
+        let before: String = chars[start..self.cursor].iter().collect();
+        let under: String = chars.get(self.cursor).map_or(" ".into(), |c| c.to_string());
+        let after: String = if self.cursor < end {
+            chars[self.cursor + 1..end].iter().collect()
+        } else {
+            String::new()
+        };
+        Line::from(vec![
+            Span::raw(before),
+            Span::styled(under, Style::new().add_modifier(Modifier::REVERSED)),
+            Span::raw(after),
+        ])
     }
 }
 
@@ -143,4 +208,32 @@ pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
         .flex(Flex::Center)
         .areas(row);
     cell
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn edits_at_cursor() {
+        let mut i = Input::new("steam");
+        i.handle(key(KeyCode::Home));
+        for c in "set".chars() {
+            i.handle(key(KeyCode::Char(c)));
+        }
+        i.handle(key(KeyCode::Char('é')));
+        i.handle(key(KeyCode::Backspace));
+        i.handle(key(KeyCode::Char(' ')));
+        assert_eq!(i.value, "set steam");
+        i.handle(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        assert_eq!(i.value, "steam");
+        i.handle(key(KeyCode::End));
+        i.handle(key(KeyCode::Left));
+        i.handle(key(KeyCode::Delete));
+        assert_eq!(i.value, "stea");
+    }
 }

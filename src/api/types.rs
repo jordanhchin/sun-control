@@ -6,8 +6,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// Sunshine encodes most booleans as the strings "true"/"false".
-fn status_ok(v: &Value) -> bool {
+/// Sunshine encodes booleans as JSON booleans or as the strings "true"/"false".
+pub fn truthy(v: &Value) -> bool {
     match v {
         Value::Bool(b) => *b,
         Value::String(s) => s == "true",
@@ -26,7 +26,7 @@ pub struct Status {
 
 impl Status {
     pub fn ok(&self) -> bool {
-        status_ok(&self.status)
+        truthy(&self.status)
     }
 }
 
@@ -106,6 +106,47 @@ pub struct Client {
     pub uuid: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+impl Client {
+    /// Whether the client may start sessions; `None` on versions without the toggle.
+    pub fn enabled(&self) -> Option<bool> {
+        self.extra.get("enabled").map(truthy)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PendingPairing {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub address: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl PendingPairing {
+    pub fn label(&self) -> String {
+        let name = if self.name.is_empty() {
+            "Unknown device"
+        } else {
+            &self.name
+        };
+        let address = if self.address.is_empty() {
+            "unknown address"
+        } else {
+            &self.address
+        };
+        format!("{name} — {address}")
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PendingPairingList {
+    #[serde(default)]
+    pub pairings: Vec<PendingPairing>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

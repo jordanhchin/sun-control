@@ -1,5 +1,6 @@
 //! TUI state, key handling and background work.
 
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -9,8 +10,12 @@ use sun_control::connect::{ConnectError, ConnectOptions, Connection, connect};
 use sun_control::profiles::{self, Host, Profiles};
 use tokio::sync::mpsc::UnboundedSender;
 
+use super::app_editor::{AppEditor, EditorEvent};
+use super::apps::AppsState;
 use super::logs::LogsState;
+use super::pairing::{PAIRING_REFRESH, PairingState};
 use super::widgets::{Field, Form, FormEvent, Input};
+use sun_control::api::types::{App as SunApp, Client, PendingPairing};
 
 const DASHBOARD_REFRESH: Duration = Duration::from_secs(15);
 const LOGS_REFRESH: Duration = Duration::from_secs(3);
@@ -19,16 +24,26 @@ const TOAST_TTL: Duration = Duration::from_secs(4);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Dashboard,
+    Apps,
+    Pairing,
     Logs,
     Hosts,
 }
 
 impl Screen {
-    pub const ALL: [Screen; 3] = [Screen::Dashboard, Screen::Logs, Screen::Hosts];
+    pub const ALL: [Screen; 5] = [
+        Screen::Dashboard,
+        Screen::Apps,
+        Screen::Pairing,
+        Screen::Logs,
+        Screen::Hosts,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
             Screen::Dashboard => "Dashboard",
+            Screen::Apps => "Apps",
+            Screen::Pairing => "Pairing",
             Screen::Logs => "Logs",
             Screen::Hosts => "Hosts",
         }
@@ -65,6 +80,10 @@ pub enum Action {
     CloseApp,
     RemoveHost(String),
     Trust { host: String, fingerprint: String },
+    DeleteApp { index: usize, name: String },
+    Unpair { uuid: String, name: String },
+    UnpairAll,
+    CancelPairing { id: String, label: String },
 }
 
 pub struct Confirm {
@@ -78,11 +97,13 @@ pub enum FormKind {
     Credentials { host: String },
     AddHost,
     LogSearch,
+    Pair { pairing_id: Option<String> },
 }
 
 pub enum Modal {
     Confirm(Confirm),
     Form(Form<FormKind>),
+    Editor(Box<AppEditor>),
     Help,
 }
 
@@ -105,6 +126,12 @@ pub enum Msg {
     },
     Info(Result<Info, ApiError>),
     Logs(Result<String, ApiError>),
+    Apps(Result<Vec<SunApp>, ApiError>),
+    Pairing {
+        pending: Result<Vec<PendingPairing>, ApiError>,
+        clients: Result<Vec<Client>, ApiError>,
+    },
+    /// A finished action; an empty message refreshes without a toast.
     Done(Result<String, String>),
 }
 
@@ -117,12 +144,14 @@ pub struct App {
     pub info_at: Option<Instant>,
     pub logs: LogsState,
     pub logs_at: Option<Instant>,
+    pub apps: AppsState,
+    pub pairing: PairingState,
     pub hosts: TableState,
     pub modal: Option<Modal>,
     pub toast: Option<Toast>,
     pub quit: bool,
     signed_in_as: Option<String>,
-    tx: UnboundedSender<Msg>,
+    pub(super) tx: UnboundedSender<Msg>,
 }
 
 impl App {
@@ -138,6 +167,8 @@ impl App {
             info_at: None,
             logs: LogsState::default(),
             logs_at: None,
+            apps: AppsState::default(),
+            pairing: PairingState::default(),
             hosts,
             modal: None,
             toast: None,
@@ -166,7 +197,7 @@ impl App {
         }
     }
 
-    fn toast(&mut self, text: impl Into<String>, kind: ToastKind) {
+    pub(super) fn toast(&mut self, text: impl Into<String>, kind: ToastKind) {
         self.toast = Some(Toast {
             text: text.into(),
             kind,
@@ -182,10 +213,12 @@ impl App {
         self.info_at = None;
         self.logs = LogsState::default();
         self.logs_at = None;
+        self.apps = AppsState::default();
+        self.pairing = PairingState::default();
         // Server details double as the credential check, whatever the screen.
         self.load_info();
-        if self.screen == Screen::Logs {
-            self.load_logs();
+        if self.screen != Screen::Dashboard {
+            self.refresh();
         }
     }
 
@@ -223,8 +256,26 @@ impl App {
     pub fn refresh(&mut self) {
         match self.screen {
             Screen::Logs => self.load_logs(),
-            _ => self.load_info(),
+            Screen::Apps => self.load_apps(),
+            Screen::Pairing => self.load_pairing(),
+            Screen::Dashboard | Screen::Hosts => self.load_info(),
         }
+    }
+
+    /// Run an API call in the background and report its result as a toast.
+    pub(super) fn run_api<F, Fut>(&self, f: F)
+    where
+        F: FnOnce(SunshineClient) -> Fut,
+        Fut: Future<Output = Result<String, ApiError>> + Send + 'static,
+    {
+        let Some(client) = self.client().cloned() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        let fut = f(client);
+        tokio::spawn(async move {
+            let _ = tx.send(Msg::Done(fut.await.map_err(|e| e.to_string())));
+        });
     }
 
     fn load_info(&mut self) {
@@ -275,25 +326,30 @@ impl App {
                 };
                 self.start_connect(opts);
             }
-            Action::Restart | Action::CloseApp => {
-                let Some(client) = self.client().cloned() else {
-                    return;
-                };
-                let tx = self.tx.clone();
-                tokio::spawn(async move {
-                    let result = match action {
-                        Action::Restart => client
-                            .restart()
-                            .await
-                            .map(|_| "Sunshine is restarting".to_owned()),
-                        _ => client
-                            .close_app()
-                            .await
-                            .map(|_| "Closed the running app".to_owned()),
-                    };
-                    let _ = tx.send(Msg::Done(result.map_err(|e| e.to_string())));
-                });
-            }
+            Action::Restart => self.run_api(|c| async move {
+                c.restart().await?;
+                Ok("Sunshine is restarting".into())
+            }),
+            Action::CloseApp => self.run_api(|c| async move {
+                c.close_app().await?;
+                Ok("Closed the running app".into())
+            }),
+            Action::DeleteApp { index, name } => self.run_api(move |c| async move {
+                c.delete_app(index).await?;
+                Ok(format!("Deleted “{name}”"))
+            }),
+            Action::Unpair { uuid, name } => self.run_api(move |c| async move {
+                c.unpair(&uuid).await?;
+                Ok(format!("Unpaired “{name}”"))
+            }),
+            Action::UnpairAll => self.run_api(|c| async move {
+                c.unpair_all().await?;
+                Ok("Unpaired all devices".into())
+            }),
+            Action::CancelPairing { id, label } => self.run_api(move |c| async move {
+                c.cancel_pairing(&id).await?;
+                Ok(format!("Cancelled pairing request from {label}"))
+            }),
         }
     }
 
@@ -360,9 +416,27 @@ impl App {
                     Err(e) => self.logs.status = super::logs::LogStatus::Failed(e.to_string()),
                 }
             }
+            Msg::Apps(result) => {
+                self.apps.list = match result {
+                    Ok(list) => Load::Ready(list),
+                    Err(e) => Load::Failed(e.to_string()),
+                };
+                let n = self.apps.apps().len();
+                let sel = self
+                    .apps
+                    .table
+                    .selected()
+                    .unwrap_or(0)
+                    .min(n.saturating_sub(1));
+                self.apps.table.select(Some(sel));
+            }
+            Msg::Pairing { pending, clients } => self.pairing.set(pending, clients),
             Msg::Done(Ok(text)) => {
-                self.toast(text, ToastKind::Info);
+                if !text.is_empty() {
+                    self.toast(text, ToastKind::Info);
+                }
                 self.info_at = None;
+                self.refresh();
             }
             Msg::Done(Err(e)) => self.toast(e, ToastKind::Error),
         }
@@ -438,6 +512,7 @@ impl App {
         match self.screen {
             Screen::Logs if self.logs.follow && due(self.logs_at, LOGS_REFRESH) => self.load_logs(),
             Screen::Dashboard if due(self.info_at, DASHBOARD_REFRESH) => self.load_info(),
+            Screen::Pairing if due(self.pairing.at, PAIRING_REFRESH) => self.load_pairing(),
             _ => {}
         }
     }
@@ -471,6 +546,8 @@ impl App {
             }
             _ => match self.screen {
                 Screen::Dashboard => self.dashboard_key(key),
+                Screen::Apps => self.apps_key(key),
+                Screen::Pairing => self.pairing_key(key),
                 Screen::Logs => self.logs_key(key),
                 Screen::Hosts => self.hosts_key(key),
             },
@@ -501,6 +578,11 @@ impl App {
     fn on_modal_key(&mut self, modal: Modal, key: KeyEvent) {
         match modal {
             Modal::Help => {}
+            Modal::Editor(mut editor) => match editor.handle(key) {
+                EditorEvent::Save => self.save_editor(editor),
+                EditorEvent::Cancel => {}
+                EditorEvent::None => self.modal = Some(Modal::Editor(editor)),
+            },
             Modal::Confirm(c) => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                     self.run_action(c.action)
@@ -527,6 +609,7 @@ impl App {
 
     fn submit_form(&mut self, form: Form<FormKind>) {
         match form.kind.clone() {
+            FormKind::Pair { .. } => self.submit_pair(form),
             FormKind::LogSearch => {
                 self.logs.search = Some(form.value(0).to_owned()).filter(|s| !s.is_empty());
                 if self.logs.search.is_some() && !self.logs.find(true) && !self.logs.find(false) {

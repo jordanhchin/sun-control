@@ -73,7 +73,8 @@ pub async fn connect(
     };
     let url = profiles::normalize_url(&host.url)?;
 
-    let trust = if opts.insecure {
+    // Plain http (e.g. behind a reverse proxy) has no certificate to pin.
+    let trust = if opts.insecure || url.scheme() == "http" {
         Trust::Any
     } else if let Some(fp) = &host.fingerprint {
         Trust::Pinned(fp.clone())

@@ -44,6 +44,10 @@ pub enum Command {
         /// Name to give the client
         #[arg(short, long, default_value = "Moonlight")]
         name: String,
+        /// Which waiting device to pair (id, name or address; see `clients pending`).
+        /// Not needed when only one device is waiting.
+        #[arg(short, long)]
+        device: Option<String>,
     },
     /// Paired clients
     #[command(subcommand)]
@@ -70,6 +74,20 @@ pub enum Command {
 #[derive(Debug, Subcommand)]
 pub enum ClientsCmd {
     List,
+    /// Devices waiting to pair
+    Pending,
+    /// Cancel a waiting pairing request
+    Cancel {
+        device: String,
+    },
+    /// Allow a paired client to start sessions again
+    Enable {
+        client: String,
+    },
+    /// Stop a paired client from starting sessions without unpairing it
+    Disable {
+        client: String,
+    },
     /// Unpair a client by name or UUID
     Unpair {
         client: String,

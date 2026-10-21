@@ -78,8 +78,38 @@ async fn maps_errors() {
     let api = client(&server);
     assert!(matches!(api.config().await, Err(ApiError::Unauthorized)));
     assert!(matches!(api.logs().await, Err(ApiError::Unsupported(_))));
-    match api.pair("1234", "tv").await {
+    match api.pair("1234", "tv", None).await {
         Err(ApiError::Server(msg)) => assert_eq!(msg, "bad pin"),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn pairs_with_a_pending_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/pin"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "pairings": [{"id": "p1", "name": "Steam Deck", "address": "10.0.0.5"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/pin"))
+        .and(body_partial_json(
+            json!({"pairing_id": "p1", "pin": "1234", "name": "deck"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": false})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let api = client(&server);
+    let pending = api.pending_pairings().await.unwrap();
+    assert_eq!(pending[0].label(), "Steam Deck — 10.0.0.5");
+    // A bare `status: false` gets a helpful message rather than "api/pin failed".
+    match api.pair("1234", "deck", Some("p1")).await {
+        Err(ApiError::Server(msg)) => assert!(msg.contains("PIN"), "{msg}"),
         other => panic!("unexpected {other:?}"),
     }
 }

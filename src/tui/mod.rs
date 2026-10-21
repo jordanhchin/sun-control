@@ -1,7 +1,10 @@
 //! Interactive terminal UI.
 
 mod app;
+mod app_editor;
+mod apps;
 mod logs;
+mod pairing;
 mod ui;
 mod widgets;
 
