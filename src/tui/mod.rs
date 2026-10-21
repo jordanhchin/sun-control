@@ -30,11 +30,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut app = App::new(profiles, opts.insecure, tx);
-    let host = opts
-        .host
-        .clone()
-        .unwrap_or_else(|| app.profiles.default_name().to_owned());
-    app.on_connect_result(opts.clone(), host, initial);
+    app.start(opts.clone(), initial);
 
     let mut terminal = ratatui::init();
     let mut events = EventStream::new();

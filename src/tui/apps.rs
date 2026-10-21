@@ -13,41 +13,91 @@ use super::app::{Action, App, Confirm, Load, Modal, Msg, ToastKind};
 use super::app_editor::AppEditor;
 use super::ui::{ACCENT, card, muted, not_connected, pane, row};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Moving {
+    No,
+    /// The swap is being saved.
+    Saving,
+    /// Saved (or failed); reloading the list from the server.
+    Reloading,
+}
+
 pub struct AppsState {
     pub list: Load<Vec<SunApp>>,
     pub table: TableState,
-    /// A reorder is being saved; further moves wait for it.
-    pub moving: bool,
+    /// A reorder is being saved or the list reloaded after it; app changes
+    /// wait, since indices may not match the server.
+    pub moving: Moving,
+    /// Apps a failed reorder displaced, still to be offered for re-adding.
+    pub recover: Vec<SunApp>,
 }
 
-/// Why a reorder failed, and the app it displaced if it couldn't be restored.
+/// Why a reorder failed, and any apps the server may no longer have.
 #[derive(Debug)]
 pub struct MoveFailure {
     pub message: String,
-    pub lost: Option<Box<SunApp>>,
+    pub lost: Vec<SunApp>,
+    /// The server's list couldn't be read back, so `lost` is every app that
+    /// might be missing rather than ones known to be.
+    pub uncertain: bool,
+}
+
+impl MoveFailure {
+    /// Judge a failure against the server's list (`None` if unreadable).
+    fn new(e: &ApiError, list: Option<&[SunApp]>, apps: [&SunApp; 2]) -> Self {
+        let lost = apps
+            .into_iter()
+            .filter(|x| list.is_none_or(|l| !l.iter().any(|y| same_app(x, y))))
+            .cloned()
+            .collect();
+        Self {
+            message: e.to_string(),
+            lost,
+            uncertain: list.is_none(),
+        }
+    }
+}
+
+/// Whether two entries are the same app, preferring Sunshine's uuid.
+fn same_app(x: &SunApp, y: &SunApp) -> bool {
+    match (x.extra.get("uuid"), y.extra.get("uuid")) {
+        (Some(a), Some(b)) => a == b,
+        _ => serde_json::to_value(x).ok() == serde_json::to_value(y).ok(),
+    }
 }
 
 /// Put `a` at `to` and `b` at `from`.
+///
+/// A failed save may still have been applied (the response was lost or
+/// malformed), so every failure is judged against what the server then has.
 async fn swap_apps(
     client: &SunshineClient,
     (from, a): (usize, SunApp),
     (to, b): (usize, SunApp),
 ) -> Result<(), MoveFailure> {
-    let fail = |e: ApiError, lost| MoveFailure {
-        message: e.to_string(),
-        lost,
-    };
-    // Nothing has changed if this fails.
-    client
-        .save_app(&a, Some(to))
-        .await
-        .map_err(|e| fail(e, None))?;
+    let server = || async { client.apps().await.ok().map(|l| l.apps) };
+    let at = |l: &[SunApp], i: usize, x: &SunApp| l.get(i).is_some_and(|y| same_app(x, y));
+    if let Err(e) = client.save_app(&a, Some(to)).await {
+        let list = server().await;
+        match list.as_deref() {
+            // Applied despite the error: carry on with the second half.
+            Some(l) if at(l, to, &a) && at(l, from, &a) => {}
+            l => return Err(MoveFailure::new(&e, l, [&a, &b])),
+        }
+    }
     // `b` now only exists in memory until this succeeds.
     if let Err(e) = client.save_app(&b, Some(from)).await {
-        return match client.save_app(&b, Some(to)).await {
-            Ok(()) => Err(fail(e, None)),
-            Err(_) => Err(fail(e, Some(Box::new(b)))),
-        };
+        let list = server().await;
+        match list.as_deref() {
+            Some(l) if at(l, to, &a) && at(l, from, &b) => return Ok(()),
+            // Only the first half applied: put `b` back in its own slot.
+            Some(l) if at(l, to, &a) && at(l, from, &a) => {
+                let _ = client.save_app(&b, Some(to)).await;
+                let list = server().await;
+                return Err(MoveFailure::new(&e, list.as_deref(), [&a, &b]));
+            }
+            l => return Err(MoveFailure::new(&e, l, [&a, &b])),
+        }
     }
     Ok(())
 }
@@ -57,7 +107,8 @@ impl Default for AppsState {
         Self {
             list: Load::Idle,
             table: TableState::default().with_selected(Some(0)),
-            moving: false,
+            moving: Moving::No,
+            recover: Vec::new(),
         }
     }
 }
@@ -100,6 +151,14 @@ impl App {
         }
         let n = self.apps.apps().len();
         let sel = self.apps.table.selected().unwrap_or(0);
+        let mutates = matches!(
+            key.code,
+            KeyCode::Char('J' | 'K' | 'a' | 'e' | 'c' | 'd') | KeyCode::Enter | KeyCode::Delete
+        ) || (key.modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(key.code, KeyCode::Up | KeyCode::Down));
+        if mutates && self.apps.moving != Moving::No {
+            return self.toast("Still saving the app order…", ToastKind::Info);
+        }
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
             KeyCode::Char('J') => self.move_app(1),
@@ -154,9 +213,6 @@ impl App {
     /// with two saves. If the second fails, the first is rolled back; if that
     /// fails too, the displaced app is handed back for re-adding.
     fn move_app(&mut self, delta: isize) {
-        if self.apps.moving {
-            return self.toast("Still saving the previous move…", ToastKind::Info);
-        }
         let Some((from, a)) = self.apps.selected().map(|(i, a)| (i, a.clone())) else {
             return;
         };
@@ -169,43 +225,64 @@ impl App {
             return;
         };
         let to = to as usize;
+        let Some(client) = self.client().cloned() else {
+            return;
+        };
         if let Load::Ready(list) = &mut self.apps.list {
             list.swap(from, to);
         }
         self.apps.table.select(Some(to));
-        self.apps.moving = true;
-        let Some(client) = self.client().cloned() else {
-            return;
-        };
+        self.apps.moving = Moving::Saving;
         self.spawn(async move { Msg::AppMoved(swap_apps(&client, (from, a), (to, b)).await) });
     }
 
+    /// `moving` stays set until the reload lands, so nothing acts on indices
+    /// from the optimistic list.
     pub(super) fn on_app_moved(&mut self, result: Result<(), MoveFailure>) {
-        self.apps.moving = false;
-        match result {
-            Ok(()) => {}
-            Err(MoveFailure {
+        if let Err(failure) = result {
+            // The optimistic order is wrong; don't show or act on it.
+            self.apps.list = Load::Loading;
+            let MoveFailure {
                 message,
-                lost: None,
-            }) => self.toast(
-                format!("Couldn't move the app: {message}"),
-                ToastKind::Error,
-            ),
-            Err(MoveFailure {
-                message,
-                lost: Some(app),
-            }) => {
-                // Don't lose the app: offer it back as a new entry to save.
+                mut lost,
+                uncertain,
+            } = failure;
+            if lost.is_empty() {
                 self.toast(
-                    format!("Moving failed ({message}). Save to re-add “{}”.", app.name),
+                    format!("Couldn't move the app: {message}"),
                     ToastKind::Error,
                 );
-                let editor = AppEditor::new(*app, None, self.platform().as_deref());
-                self.modal = Some(Modal::Editor(Box::new(editor)));
+            } else {
+                // Don't lose apps: offer each back as a new entry to save.
+                let names: Vec<String> = lost.iter().map(|a| format!("“{}”", a.name)).collect();
+                let names = names.join(" and ");
+                let text = if uncertain {
+                    format!(
+                        "Moving failed ({message}) and the app list couldn't be checked. If {names} is missing, save to re-add it."
+                    )
+                } else {
+                    format!("Moving failed ({message}). Save to re-add {names}.")
+                };
+                self.toast(text, ToastKind::Error);
+                lost.reverse();
+                self.apps.recover.extend(lost);
+                self.next_recovered_app();
             }
         }
         // Whatever happened, show what the server actually has.
+        self.apps.moving = Moving::Reloading;
         self.load_apps();
+    }
+
+    /// Open the next displaced app in the editor, if any.
+    pub(super) fn next_recovered_app(&mut self) {
+        if self.modal.is_some() {
+            return;
+        }
+        if let Some(app) = self.apps.recover.pop() {
+            let editor = AppEditor::new(app, None, self.platform().as_deref());
+            self.modal = Some(Modal::Editor(Box::new(editor)));
+        }
     }
 
     pub(super) fn save_editor(&mut self, editor: Box<AppEditor>) {
@@ -381,10 +458,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Mutex;
     use sun_control::api::Credentials;
     use sun_control::api::tls::Trust;
-    use wiremock::matchers::{body_partial_json, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::path;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     fn named(name: &str) -> SunApp {
         SunApp {
@@ -393,37 +471,70 @@ mod tests {
         }
     }
 
-    async fn server(rollback_works: bool) -> MockServer {
+    /// What a save does: fail before applying, fail after applying (the
+    /// response is lost or malformed), or succeed.
+    #[derive(Clone, Copy)]
+    enum Save {
+        Ok,
+        FailBefore,
+        FailAfter,
+    }
+
+    /// A Sunshine app list that applies saves according to a script.
+    struct Fake {
+        apps: Mutex<Vec<String>>,
+        script: Mutex<Vec<Save>>,
+        list_works: bool,
+    }
+
+    impl Respond for Fake {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let mut apps = self.apps.lock().unwrap();
+            if req.method.as_str() == "GET" {
+                if !self.list_works {
+                    return ResponseTemplate::new(500);
+                }
+                let list: Vec<_> = apps.iter().map(|n| json!({"name": n})).collect();
+                return ResponseTemplate::new(200).set_body_json(json!({"apps": list}));
+            }
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            let step = self.script.lock().unwrap().remove(0);
+            if !matches!(step, Save::FailBefore) {
+                let i = body["index"].as_u64().unwrap() as usize;
+                apps[i] = body["name"].as_str().unwrap().into();
+            }
+            match step {
+                Save::Ok => ResponseTemplate::new(200).set_body_json(json!({"status": true})),
+                _ => ResponseTemplate::new(200).set_body_string("<html>proxy error</html>"),
+            }
+        }
+    }
+
+    /// Swap A (index 0) and B (index 1); return the error and the server's final list.
+    async fn swap(script: &[Save], list_works: bool) -> (Option<MoveFailure>, Vec<String>) {
         let server = MockServer::start().await;
-        let ok = || ResponseTemplate::new(200).set_body_json(json!({"status": true}));
-        // A moves into B's slot (index 1): fine.
-        Mock::given(method("POST"))
-            .and(path("/api/apps"))
-            .and(body_partial_json(json!({"name": "A", "index": 1})))
-            .respond_with(ok())
+        let fake = std::sync::Arc::new(Fake {
+            apps: Mutex::new(vec!["A".into(), "B".into()]),
+            script: Mutex::new(script.to_vec()),
+            list_works,
+        });
+        struct Shared(std::sync::Arc<Fake>);
+        impl Respond for Shared {
+            fn respond(&self, req: &Request) -> ResponseTemplate {
+                self.0.respond(req)
+            }
+        }
+        Mock::given(path("/api/apps"))
+            .respond_with(Shared(fake.clone()))
             .mount(&server)
             .await;
-        // B into A's old slot (index 0): fails.
-        Mock::given(method("POST"))
-            .and(path("/api/apps"))
-            .and(body_partial_json(json!({"name": "B", "index": 0})))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&server)
-            .await;
-        // Rolling B back into its own slot.
-        let rollback = if rollback_works {
-            ok()
-        } else {
-            ResponseTemplate::new(500)
-        };
-        Mock::given(method("POST"))
-            .and(path("/api/apps"))
-            .and(body_partial_json(json!({"name": "B", "index": 1})))
-            .respond_with(rollback)
-            .expect(1)
-            .mount(&server)
-            .await;
-        server
+        let result = swap_apps(&client(&server), (0, named("A")), (1, named("B"))).await;
+        let apps = fake.apps.lock().unwrap().clone();
+        (result.err(), apps)
+    }
+
+    fn lost(f: &MoveFailure) -> Vec<&str> {
+        f.lost.iter().map(|a| a.name.as_str()).collect()
     }
 
     fn client(server: &MockServer) -> SunshineClient {
@@ -440,20 +551,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn swaps_when_both_saves_succeed() {
+        let (err, apps) = swap(&[Save::Ok, Save::Ok], true).await;
+        assert!(err.is_none());
+        assert_eq!(apps, ["B", "A"]);
+    }
+
+    #[tokio::test]
+    async fn failed_first_save_changes_nothing() {
+        let (err, apps) = swap(&[Save::FailBefore], true).await;
+        assert!(err.unwrap().lost.is_empty());
+        assert_eq!(apps, ["A", "B"]);
+    }
+
+    #[tokio::test]
+    async fn first_save_applied_despite_error_still_completes() {
+        let (err, apps) = swap(&[Save::FailAfter, Save::Ok], true).await;
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(apps, ["B", "A"]);
+    }
+
+    #[tokio::test]
+    async fn second_save_applied_despite_error_is_kept() {
+        let (err, apps) = swap(&[Save::Ok, Save::FailAfter], true).await;
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(apps, ["B", "A"], "rollback overwrote a completed swap");
+    }
+
+    #[tokio::test]
     async fn failed_second_save_is_rolled_back() {
-        let server = server(true).await;
-        let err = swap_apps(&client(&server), (0, named("A")), (1, named("B")))
-            .await
-            .unwrap_err();
-        assert!(err.lost.is_none(), "B was restored, nothing is lost");
+        let (err, apps) = swap(&[Save::Ok, Save::FailBefore, Save::Ok], true).await;
+        assert!(err.unwrap().lost.is_empty(), "B was restored");
+        assert_eq!(apps, ["A", "B"]);
     }
 
     #[tokio::test]
     async fn failed_rollback_hands_back_the_displaced_app() {
-        let server = server(false).await;
-        let err = swap_apps(&client(&server), (0, named("A")), (1, named("B")))
-            .await
-            .unwrap_err();
-        assert_eq!(err.lost.map(|b| b.name).as_deref(), Some("B"));
+        let (err, apps) = swap(&[Save::Ok, Save::FailBefore, Save::FailBefore], true).await;
+        let err = err.unwrap();
+        assert_eq!(lost(&err), ["B"]);
+        assert!(!err.uncertain);
+        assert_eq!(apps, ["A", "A"]);
+    }
+
+    #[tokio::test]
+    async fn unreadable_state_keeps_both_apps_for_recovery() {
+        let (err, _) = swap(&[Save::FailAfter], false).await;
+        let err = err.unwrap();
+        assert!(err.uncertain);
+        assert_eq!(lost(&err), ["A", "B"]);
     }
 }

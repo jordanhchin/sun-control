@@ -246,29 +246,38 @@ pub fn to_save_body(
         .flat_map(|t| &t.fields)
         .map(|f| (f.key.as_str(), f))
         .collect();
-    let unknown: std::collections::HashSet<&str> = tabs
+    let unknown: std::collections::HashMap<&str, &Field> = tabs
         .iter()
         .filter(|t| t.id == OTHER_TAB)
         .flat_map(|t| &t.fields)
-        .map(|f| f.key.as_str())
+        .map(|f| (f.key.as_str(), f))
         .collect();
     let mut body = Map::new();
     for (key, text) in values {
         let untouched = original.get(key).filter(|orig| as_text(orig) == *text);
         let field = fields
             .get(key.as_str())
-            .filter(|_| !unknown.contains(key.as_str()));
+            .filter(|_| !unknown.contains_key(key.as_str()));
         match (field, untouched) {
             // Unknown and unchanged: pass through verbatim.
             (None, Some(orig)) => {
                 body.insert(key.clone(), orig.clone());
             }
-            // Unknown and edited: text is all we know.
+            // Clearing an unknown setting removes it.
+            (None, None) if text.is_empty() => {}
+            // Unknown and edited: keep the JSON type the server used, so
+            // arrays stay arrays and JSON-in-a-string stays a string.
             (None, None) => {
-                // Clearing an unknown setting removes it.
-                if !text.is_empty() {
-                    body.insert(key.clone(), Value::String(text.clone()));
-                }
+                let structured =
+                    matches!(original.get(key), Some(Value::Array(_) | Value::Object(_)));
+                let value = match unknown.get(key.as_str()) {
+                    Some(f) if structured => {
+                        f.validate(text)?;
+                        serde_json::from_str(text).expect("validated")
+                    }
+                    _ => Value::String(text.clone()),
+                };
+                body.insert(key.clone(), value);
             }
             (Some(field), _) if field.is_default(text) => {}
             (Some(_), Some(orig)) => {
@@ -387,6 +396,27 @@ mod tests {
         assert_eq!(body["future_null"], Value::Null);
         assert_eq!(body["future_text"], json!("[not json"));
         assert_eq!(body["sunshine_name"], json!("living-room"));
+    }
+
+    #[test]
+    fn edited_unknown_values_keep_their_json_type() {
+        let server = json!({
+            "future_list": [1, 2], "future_map": {"a": 1}, "future_json_text": "[1]"
+        });
+        let server = server.as_object().unwrap();
+        let tabs = Schema::builtin().resolve(Some("linux"), server);
+        let edits = values(&[
+            ("future_list", "[1,2,3]"),
+            ("future_map", "{\"a\": 2}"),
+            ("future_json_text", "[1,2]"),
+        ]);
+        let body = to_save_body(&tabs, &edits, server).unwrap();
+        assert_eq!(body["future_list"], json!([1, 2, 3]));
+        assert_eq!(body["future_map"], json!({"a": 2}));
+        assert_eq!(body["future_json_text"], json!("[1,2]"));
+
+        let broken = values(&[("future_list", "[1,")]);
+        assert!(to_save_body(&tabs, &broken, server).is_err());
     }
 
     #[test]

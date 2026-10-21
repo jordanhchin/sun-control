@@ -11,7 +11,7 @@ use sun_control::profiles::{self, Host, Profiles};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::app_editor::{AppEditor, EditorEvent};
-use super::apps::{AppsState, MoveFailure};
+use super::apps::{AppsState, MoveFailure, Moving};
 use super::config::{ConfigState, Picker};
 use super::logs::LogsState;
 use super::pairing::{PAIRING_REFRESH, PairingState};
@@ -540,7 +540,11 @@ impl App {
                     Err(e) => self.logs.status = super::logs::LogStatus::Failed(e.to_string()),
                 }
             }
+            // A list fetched before a reorder finished would undo its
+            // optimistic order; the reload after it settles things.
+            Msg::Apps(_) if self.apps.moving == Moving::Saving => {}
             Msg::Apps(result) => {
+                self.apps.moving = Moving::No;
                 self.apps.list = match result {
                     Ok(list) => Load::Ready(list),
                     Err(e) => Load::Failed(e.to_string()),
@@ -569,6 +573,18 @@ impl App {
             }
             Msg::Done(Err(e)) => self.toast(e, ToastKind::Error),
         }
+    }
+
+    /// Take over the connection attempt made before the TUI started, so a
+    /// later retry (accepting the certificate, signing in) keeps the
+    /// credentials given on the command line.
+    pub fn start(&mut self, mut opts: ConnectOptions, result: Result<Connection, ConnectError>) {
+        let host = opts
+            .host
+            .get_or_insert_with(|| self.profiles.default_name().to_owned())
+            .clone();
+        self.pending_connect = Some(opts.clone());
+        self.on_connect_result(opts, host, result);
     }
 
     pub fn on_connect_result(
@@ -740,8 +756,11 @@ impl App {
             Modal::Picker(picker) => self.picker_key(picker, key),
             Modal::Palette(palette) => self.palette_key(*palette, key),
             Modal::Editor(mut editor) => match editor.handle(key) {
-                EditorEvent::Save => self.save_editor(editor),
-                EditorEvent::Cancel => {}
+                EditorEvent::Save => {
+                    self.save_editor(editor);
+                    self.next_recovered_app();
+                }
+                EditorEvent::Cancel => self.next_recovered_app(),
                 EditorEvent::None => self.modal = Some(Modal::Editor(editor)),
             },
             Modal::Confirm(c) => match key.code {
@@ -1084,5 +1103,62 @@ mod tests {
             fingerprint: "AA:BB".into(),
         });
         assert_eq!(app.pending_connect.unwrap().password.as_deref(), Some("pw"));
+    }
+
+    #[tokio::test]
+    async fn accepting_the_startup_certificate_keeps_given_credentials() {
+        let (mut app, _rx) = app();
+        let opts = ConnectOptions {
+            username: Some("admin".into()),
+            password: Some("pw".into()),
+            ..Default::default()
+        };
+        let trust = ConnectError::NeedsTrust {
+            url: "https://localhost:47990/".into(),
+            fingerprint: "AA:BB".into(),
+        };
+        app.start(opts, Err(trust));
+        let Some(Modal::Confirm(confirm)) = app.modal.take() else {
+            panic!("no trust prompt");
+        };
+        app.run_action(confirm.action);
+        let opts = app.pending_connect.unwrap();
+        assert_eq!(opts.host.as_deref(), Some(app.profiles.default_name()));
+        assert_eq!(opts.username.as_deref(), Some("admin"));
+        assert_eq!(opts.password.as_deref(), Some("pw"));
+        assert_eq!(opts.accept_fingerprint.as_deref(), Some("AA:BB"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_move_never_leaves_a_stale_order_to_act_on() {
+        let (mut app, _rx) = app();
+        let named = |n: &str| SunApp {
+            name: n.into(),
+            ..Default::default()
+        };
+        // Optimistically swapped to [B, A] while saving.
+        app.apps.list = Load::Ready(vec![named("B"), named("A")]);
+        app.apps.moving = Moving::Saving;
+        // A list fetched before the move finished is ignored.
+        app.on_envelope(Envelope {
+            session: app.session,
+            msg: Msg::Apps(Ok(vec![named("A"), named("B")])),
+        });
+        assert!(matches!(&app.apps.list, Load::Ready(l) if l[0].name == "B"));
+
+        app.on_app_moved(Err(MoveFailure {
+            message: "boom".into(),
+            lost: Vec::new(),
+            uncertain: false,
+        }));
+        assert!(app.apps.apps().is_empty(), "optimistic order still shown");
+        assert_eq!(app.apps.moving, Moving::Reloading);
+        // The reload after the move unlocks the list.
+        app.on_envelope(Envelope {
+            session: app.session,
+            msg: Msg::Apps(Ok(vec![named("A"), named("B")])),
+        });
+        assert_eq!(app.apps.moving, Moving::No);
+        assert_eq!(app.apps.apps()[0].name, "A");
     }
 }
