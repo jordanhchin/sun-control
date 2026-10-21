@@ -1,0 +1,11 @@
+[package]
+name = "sun-control"
+version = "0.1.0"
+edition = "2024"
+description = "A terminal UI for managing Sunshine game streaming servers, locally or remotely"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["sunshine", "tui", "moonlight", "streaming", "ratatui"]
+categories = ["command-line-utilities"]
+
+[dependencies]
