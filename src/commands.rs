@@ -302,7 +302,8 @@ async fn config(cmd: ConfigCmd, api: &SunshineClient) -> Result<()> {
                 }
             }
             // Validates values and, like the web UI, omits those equal to their default.
-            let body = schema::to_save_body(&tabs, &values).map_err(anyhow::Error::msg)?;
+            let body =
+                schema::to_save_body(&tabs, &values, &cfg.values).map_err(anyhow::Error::msg)?;
             api.save_config(&body).await?;
             println!("Saved.");
             if restart {

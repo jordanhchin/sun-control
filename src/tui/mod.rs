@@ -49,7 +49,7 @@ pub async fn run(
                 Some(Err(e)) => break Err(e.into()),
                 None => break Ok(()),
             },
-            Some(msg) = rx.recv() => app.on_msg(msg),
+            Some(envelope) = rx.recv() => app.on_envelope(envelope),
             _ = tick.tick() => app.on_tick(),
         }
         if app.quit {

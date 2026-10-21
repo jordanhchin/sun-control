@@ -7,6 +7,7 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState, Wrap};
 use sun_control::api::types::{App as SunApp, truthy};
+use sun_control::api::{ApiError, SunshineClient};
 
 use super::app::{Action, App, Confirm, Load, Modal, Msg, ToastKind};
 use super::app_editor::AppEditor;
@@ -15,6 +16,40 @@ use super::ui::{ACCENT, card, muted, not_connected, pane, row};
 pub struct AppsState {
     pub list: Load<Vec<SunApp>>,
     pub table: TableState,
+    /// A reorder is being saved; further moves wait for it.
+    pub moving: bool,
+}
+
+/// Why a reorder failed, and the app it displaced if it couldn't be restored.
+#[derive(Debug)]
+pub struct MoveFailure {
+    pub message: String,
+    pub lost: Option<Box<SunApp>>,
+}
+
+/// Put `a` at `to` and `b` at `from`.
+async fn swap_apps(
+    client: &SunshineClient,
+    (from, a): (usize, SunApp),
+    (to, b): (usize, SunApp),
+) -> Result<(), MoveFailure> {
+    let fail = |e: ApiError, lost| MoveFailure {
+        message: e.to_string(),
+        lost,
+    };
+    // Nothing has changed if this fails.
+    client
+        .save_app(&a, Some(to))
+        .await
+        .map_err(|e| fail(e, None))?;
+    // `b` now only exists in memory until this succeeds.
+    if let Err(e) = client.save_app(&b, Some(from)).await {
+        return match client.save_app(&b, Some(to)).await {
+            Ok(()) => Err(fail(e, None)),
+            Err(_) => Err(fail(e, Some(Box::new(b)))),
+        };
+    }
+    Ok(())
 }
 
 impl Default for AppsState {
@@ -22,6 +57,7 @@ impl Default for AppsState {
         Self {
             list: Load::Idle,
             table: TableState::default().with_selected(Some(0)),
+            moving: false,
         }
     }
 }
@@ -48,10 +84,7 @@ impl App {
         if !matches!(self.apps.list, Load::Ready(_)) {
             self.apps.list = Load::Loading;
         }
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let _ = tx.send(Msg::Apps(client.apps().await.map(|l| l.apps)));
-        });
+        self.spawn(async move { Msg::Apps(client.apps().await.map(|l| l.apps)) });
     }
 
     fn platform(&self) -> Option<String> {
@@ -117,8 +150,13 @@ impl App {
         }
     }
 
-    /// Sunshine has no reorder endpoint, so moving swaps two entries in place.
+    /// Sunshine has no reorder endpoint, so moving swaps two entries in place
+    /// with two saves. If the second fails, the first is rolled back; if that
+    /// fails too, the displaced app is handed back for re-adding.
     fn move_app(&mut self, delta: isize) {
+        if self.apps.moving {
+            return self.toast("Still saving the previous move…", ToastKind::Info);
+        }
         let Some((from, a)) = self.apps.selected().map(|(i, a)| (i, a.clone())) else {
             return;
         };
@@ -135,11 +173,39 @@ impl App {
             list.swap(from, to);
         }
         self.apps.table.select(Some(to));
-        self.run_api(move |c| async move {
-            c.save_app(&a, Some(to)).await?;
-            c.save_app(&b, Some(from)).await?;
-            Ok(String::new())
-        });
+        self.apps.moving = true;
+        let Some(client) = self.client().cloned() else {
+            return;
+        };
+        self.spawn(async move { Msg::AppMoved(swap_apps(&client, (from, a), (to, b)).await) });
+    }
+
+    pub(super) fn on_app_moved(&mut self, result: Result<(), MoveFailure>) {
+        self.apps.moving = false;
+        match result {
+            Ok(()) => {}
+            Err(MoveFailure {
+                message,
+                lost: None,
+            }) => self.toast(
+                format!("Couldn't move the app: {message}"),
+                ToastKind::Error,
+            ),
+            Err(MoveFailure {
+                message,
+                lost: Some(app),
+            }) => {
+                // Don't lose the app: offer it back as a new entry to save.
+                self.toast(
+                    format!("Moving failed ({message}). Save to re-add “{}”.", app.name),
+                    ToastKind::Error,
+                );
+                let editor = AppEditor::new(*app, None, self.platform().as_deref());
+                self.modal = Some(Modal::Editor(Box::new(editor)));
+            }
+        }
+        // Whatever happened, show what the server actually has.
+        self.load_apps();
     }
 
     pub(super) fn save_editor(&mut self, editor: Box<AppEditor>) {
@@ -309,4 +375,85 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             .wrap(Wrap { trim: false }),
         detail_area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use sun_control::api::Credentials;
+    use sun_control::api::tls::Trust;
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn named(name: &str) -> SunApp {
+        SunApp {
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+
+    async fn server(rollback_works: bool) -> MockServer {
+        let server = MockServer::start().await;
+        let ok = || ResponseTemplate::new(200).set_body_json(json!({"status": true}));
+        // A moves into B's slot (index 1): fine.
+        Mock::given(method("POST"))
+            .and(path("/api/apps"))
+            .and(body_partial_json(json!({"name": "A", "index": 1})))
+            .respond_with(ok())
+            .mount(&server)
+            .await;
+        // B into A's old slot (index 0): fails.
+        Mock::given(method("POST"))
+            .and(path("/api/apps"))
+            .and(body_partial_json(json!({"name": "B", "index": 0})))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        // Rolling B back into its own slot.
+        let rollback = if rollback_works {
+            ok()
+        } else {
+            ResponseTemplate::new(500)
+        };
+        Mock::given(method("POST"))
+            .and(path("/api/apps"))
+            .and(body_partial_json(json!({"name": "B", "index": 1})))
+            .respond_with(rollback)
+            .expect(1)
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn client(server: &MockServer) -> SunshineClient {
+        let creds = Credentials {
+            username: "admin".into(),
+            password: "pw".into(),
+        };
+        SunshineClient::new(
+            format!("{}/", server.uri()).parse().unwrap(),
+            Trust::Any,
+            Some(creds),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn failed_second_save_is_rolled_back() {
+        let server = server(true).await;
+        let err = swap_apps(&client(&server), (0, named("A")), (1, named("B")))
+            .await
+            .unwrap_err();
+        assert!(err.lost.is_none(), "B was restored, nothing is lost");
+    }
+
+    #[tokio::test]
+    async fn failed_rollback_hands_back_the_displaced_app() {
+        let server = server(false).await;
+        let err = swap_apps(&client(&server), (0, named("A")), (1, named("B")))
+            .await
+            .unwrap_err();
+        assert_eq!(err.lost.map(|b| b.name).as_deref(), Some("B"));
+    }
 }

@@ -23,6 +23,8 @@ pub struct ConfigState {
     pub version: Option<String>,
     /// Values as saved on the server, as text.
     pub saved: BTreeMap<String, String>,
+    /// The same values exactly as the server sent them.
+    pub original: serde_json::Map<String, serde_json::Value>,
     /// Pending changes; `None` resets the key to its default.
     pub edits: BTreeMap<String, Option<String>>,
     pub tab: usize,
@@ -46,6 +48,7 @@ impl ConfigState {
             .iter()
             .map(|(k, v)| (k.clone(), schema::as_text(v)))
             .collect();
+        self.original = cfg.values.clone();
         self.version = cfg.version;
         self.load = Load::Ready(());
         self.tab = self.tab.min(self.tabs.len().saturating_sub(1));
@@ -164,10 +167,7 @@ impl App {
         if !matches!(self.config.load, Load::Ready(_)) {
             self.config.load = Load::Loading;
         }
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let _ = tx.send(Msg::Config(client.config().await));
-        });
+        self.spawn(async move { Msg::Config(client.config().await) });
     }
 
     pub(super) fn on_config(&mut self, result: Result<Config, ApiError>) {
@@ -193,17 +193,18 @@ impl App {
     }
 
     pub(super) fn save_config(&mut self) {
-        let body = match schema::to_save_body(&self.config.tabs, &self.config.merged()) {
+        let body = match schema::to_save_body(
+            &self.config.tabs,
+            &self.config.merged(),
+            &self.config.original,
+        ) {
             Ok(b) => b,
             Err(e) => return self.toast(e, ToastKind::Error),
         };
         let Some(client) = self.client().cloned() else {
             return;
         };
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let _ = tx.send(Msg::ConfigSaved(client.save_config(&body).await));
-        });
+        self.spawn(async move { Msg::ConfigSaved(client.save_config(&body).await) });
     }
 
     pub(super) fn set_config_value(&mut self, key: &str, value: String) -> Result<(), String> {
@@ -280,7 +281,11 @@ impl App {
                 if self.config.dirty() == 0 {
                     return self.toast("No changes to save", ToastKind::Info);
                 }
-                if let Err(e) = schema::to_save_body(&self.config.tabs, &self.config.merged()) {
+                if let Err(e) = schema::to_save_body(
+                    &self.config.tabs,
+                    &self.config.merged(),
+                    &self.config.original,
+                ) {
                     return self.toast(e, ToastKind::Error);
                 }
                 self.modal = Some(Modal::Confirm(Confirm {

@@ -231,32 +231,58 @@ impl Schema {
 
 /// Build the body for `POST /api/config` the way the web UI does: every
 /// setting except those equal to their default, with JSON settings sent as
-/// structured values. Keys no schema knows are kept as they are.
+/// structured values.
+///
+/// `original` is what the server returned. A value that wasn't edited is sent
+/// back exactly as received (same JSON type, unvalidated), so settings this
+/// schema doesn't understand survive unrelated saves unchanged.
 pub fn to_save_body(
     tabs: &[Tab],
     values: &BTreeMap<String, String>,
+    original: &Map<String, Value>,
 ) -> Result<Map<String, Value>, String> {
     let fields: std::collections::HashMap<&str, &Field> = tabs
         .iter()
         .flat_map(|t| &t.fields)
         .map(|f| (f.key.as_str(), f))
         .collect();
+    let unknown: std::collections::HashSet<&str> = tabs
+        .iter()
+        .filter(|t| t.id == OTHER_TAB)
+        .flat_map(|t| &t.fields)
+        .map(|f| f.key.as_str())
+        .collect();
     let mut body = Map::new();
     for (key, text) in values {
-        let Some(field) = fields.get(key.as_str()) else {
-            body.insert(key.clone(), Value::String(text.clone()));
-            continue;
-        };
-        // Unknown ("Other") keys default to empty, so clearing one removes it.
-        if field.is_default(text) {
-            continue;
+        let untouched = original.get(key).filter(|orig| as_text(orig) == *text);
+        let field = fields
+            .get(key.as_str())
+            .filter(|_| !unknown.contains(key.as_str()));
+        match (field, untouched) {
+            // Unknown and unchanged: pass through verbatim.
+            (None, Some(orig)) => {
+                body.insert(key.clone(), orig.clone());
+            }
+            // Unknown and edited: text is all we know.
+            (None, None) => {
+                // Clearing an unknown setting removes it.
+                if !text.is_empty() {
+                    body.insert(key.clone(), Value::String(text.clone()));
+                }
+            }
+            (Some(field), _) if field.is_default(text) => {}
+            (Some(_), Some(orig)) => {
+                body.insert(key.clone(), orig.clone());
+            }
+            (Some(field), None) => {
+                field.validate(text)?;
+                let value = match field.kind {
+                    Kind::Json => serde_json::from_str(text).expect("validated"),
+                    _ => Value::String(text.clone()),
+                };
+                body.insert(key.clone(), value);
+            }
         }
-        field.validate(text)?;
-        let value = match field.kind {
-            Kind::Json => serde_json::from_str(text).expect("validated"),
-            _ => Value::String(text.clone()),
-        };
-        body.insert(key.clone(), value);
     }
     Ok(body)
 }
@@ -322,6 +348,7 @@ mod tests {
                 ("global_prep_cmd", "[{\"do\":\"a\",\"undo\":\"b\"}]"),
                 ("brand_new_option", "7"),
             ]),
+            server.as_object().unwrap(),
         )
         .unwrap();
         assert_eq!(body.len(), 3, "{body:?}");
@@ -333,8 +360,33 @@ mod tests {
     #[test]
     fn rejects_invalid_values() {
         let tabs = Schema::builtin().resolve(None, &Map::new());
-        assert!(to_save_body(&tabs, &values(&[("port", "abc")])).is_err());
-        assert!(to_save_body(&tabs, &values(&[("global_prep_cmd", "[oops")])).is_err());
+        assert!(to_save_body(&tabs, &values(&[("port", "abc")]), &Map::new()).is_err());
+        assert!(
+            to_save_body(&tabs, &values(&[("global_prep_cmd", "[oops")]), &Map::new()).is_err()
+        );
+    }
+
+    #[test]
+    fn untouched_values_keep_their_exact_json() {
+        let server = json!({
+            "future_flag": true, "future_count": 7, "future_null": null,
+            "future_text": "[not json", "sunshine_name": "den"
+        });
+        let server = server.as_object().unwrap();
+        let tabs = Schema::builtin().resolve(Some("linux"), server);
+        // What the TUI holds: server values as text, plus one unrelated edit.
+        let mut text: BTreeMap<String, String> = server
+            .iter()
+            .map(|(k, v)| (k.clone(), as_text(v)))
+            .collect();
+        text.insert("sunshine_name".into(), "living-room".into());
+
+        let body = to_save_body(&tabs, &text, server).unwrap();
+        assert_eq!(body["future_flag"], json!(true));
+        assert_eq!(body["future_count"], json!(7));
+        assert_eq!(body["future_null"], Value::Null);
+        assert_eq!(body["future_text"], json!("[not json"));
+        assert_eq!(body["sunshine_name"], json!("living-room"));
     }
 
     #[test]

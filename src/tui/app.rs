@@ -11,7 +11,7 @@ use sun_control::profiles::{self, Host, Profiles};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::app_editor::{AppEditor, EditorEvent};
-use super::apps::AppsState;
+use super::apps::{AppsState, MoveFailure};
 use super::config::{ConfigState, Picker};
 use super::logs::LogsState;
 use super::pairing::{PAIRING_REFRESH, PairingState};
@@ -158,6 +158,7 @@ pub enum Msg {
     Info(Result<Info, ApiError>),
     Logs(Result<String, ApiError>),
     Apps(Result<Vec<SunApp>, ApiError>),
+    AppMoved(Result<(), MoveFailure>),
     Pairing {
         pending: Result<Vec<PendingPairing>, ApiError>,
         clients: Result<Vec<Client>, ApiError>,
@@ -165,9 +166,18 @@ pub enum Msg {
     Config(Result<Config, ApiError>),
     ConfigSaved(Result<(), ApiError>),
     Permissions(Result<Vec<Permission>, ApiError>),
-    LoginChanged(Result<Credentials, ApiError>),
+    LoginChanged {
+        host: String,
+        result: Result<Credentials, ApiError>,
+    },
     /// A finished action; an empty message refreshes without a toast.
     Done(Result<String, String>),
+}
+
+/// A background result and the connection session it belongs to.
+pub struct Envelope {
+    pub session: u64,
+    pub msg: Msg,
 }
 
 pub struct App {
@@ -191,11 +201,15 @@ pub struct App {
     pub toast: Option<Toast>,
     pub quit: bool,
     signed_in_as: Option<String>,
-    pub(super) tx: UnboundedSender<Msg>,
+    pub(super) tx: UnboundedSender<Envelope>,
+    /// Bumped whenever a connection attempt starts.
+    session: u64,
+    /// Options of the latest connection attempt, for retrying after a dialog.
+    pending_connect: Option<ConnectOptions>,
 }
 
 impl App {
-    pub fn new(profiles: Profiles, insecure: bool, tx: UnboundedSender<Msg>) -> Self {
+    pub fn new(profiles: Profiles, insecure: bool, tx: UnboundedSender<Envelope>) -> Self {
         let mut hosts = TableState::default();
         hosts.select(Some(0));
         Self {
@@ -219,6 +233,8 @@ impl App {
             quit: false,
             signed_in_as: None,
             tx,
+            session: 0,
+            pending_connect: None,
         }
     }
 
@@ -294,18 +310,34 @@ impl App {
         self.start_connect(opts);
     }
 
+    /// Options for retrying `host` after a dialog: the pending attempt's
+    /// (keeping an accepted fingerprint or typed login), else fresh ones.
+    fn retry_options(&self, host: String) -> ConnectOptions {
+        match &self.pending_connect {
+            Some(opts) if opts.host.as_deref() == Some(host.as_str()) => opts.clone(),
+            _ => ConnectOptions {
+                host: Some(host),
+                insecure: self.insecure,
+                ..Default::default()
+            },
+        }
+    }
+
     fn start_connect(&mut self, opts: ConnectOptions) {
         let host = opts.host.clone().unwrap_or_default();
         self.conn = ConnState::Connecting(host);
+        // A new session: anything still in flight for the old one is ignored.
+        self.session += 1;
+        // Kept so the trust and sign-in dialogs each add to it, not replace it.
+        self.pending_connect = Some(opts.clone());
         let mut profiles = self.profiles.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
+        self.spawn(async move {
             let result = connect(&mut profiles, &opts).await;
-            let _ = tx.send(Msg::Connected {
+            Msg::Connected {
                 profiles: Box::new(profiles),
                 opts,
                 result,
-            });
+            }
         });
     }
 
@@ -331,10 +363,23 @@ impl App {
         let Some(client) = self.client().cloned() else {
             return;
         };
-        let tx = self.tx.clone();
         let fut = f(client);
+        self.spawn(async move { Msg::Done(fut.await.map_err(|e| e.to_string())) });
+    }
+
+    /// Run `fut` in the background, delivering its message tagged with the
+    /// current session so results for a previous connection can be dropped.
+    pub(super) fn spawn<F>(&self, fut: F)
+    where
+        F: Future<Output = Msg> + Send + 'static,
+    {
+        let tx = self.tx.clone();
+        let session = self.session;
         tokio::spawn(async move {
-            let _ = tx.send(Msg::Done(fut.await.map_err(|e| e.to_string())));
+            let _ = tx.send(Envelope {
+                session,
+                msg: fut.await,
+            });
         });
     }
 
@@ -346,10 +391,7 @@ impl App {
             self.info = Load::Loading;
         }
         self.info_at = Some(Instant::now());
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let _ = tx.send(Msg::Info(fetch_info(&client).await));
-        });
+        self.spawn(async move { Msg::Info(fetch_info(&client).await) });
     }
 
     fn load_logs(&mut self) {
@@ -361,10 +403,7 @@ impl App {
         };
         self.logs.in_flight = true;
         self.logs_at = Some(Instant::now());
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let _ = tx.send(Msg::Logs(client.logs().await));
-        });
+        self.spawn(async move { Msg::Logs(client.logs().await) });
     }
 
     fn run_action(&mut self, action: Action) {
@@ -378,12 +417,8 @@ impl App {
                 self.clamp_host_selection();
             }
             Action::Trust { host, fingerprint } => {
-                let opts = ConnectOptions {
-                    host: Some(host),
-                    insecure: self.insecure,
-                    accept_fingerprint: Some(fingerprint),
-                    ..Default::default()
-                };
+                let mut opts = self.retry_options(host);
+                opts.accept_fingerprint = Some(fingerprint);
                 self.start_connect(opts);
             }
             Action::Restart => self.run_api(|c| async move {
@@ -433,7 +468,25 @@ impl App {
 
     // ---- events -----------------------------------------------------------
 
-    pub fn on_msg(&mut self, msg: Msg) {
+    pub fn on_envelope(&mut self, envelope: Envelope) {
+        if envelope.session == self.session {
+            return self.on_msg(envelope.msg);
+        }
+        // A stale result for a connection we've since left. Drop it, except
+        // that a completed password change is worth knowing about.
+        if let Msg::LoginChanged {
+            host,
+            result: Ok(_),
+        } = envelope.msg
+        {
+            self.toast(
+                format!("Admin login for {host} was changed"),
+                ToastKind::Info,
+            );
+        }
+    }
+
+    fn on_msg(&mut self, msg: Msg) {
         match msg {
             Msg::Connected {
                 profiles,
@@ -502,10 +555,11 @@ impl App {
                 self.apps.table.select(Some(sel));
             }
             Msg::Pairing { pending, clients } => self.pairing.set(pending, clients),
+            Msg::AppMoved(result) => self.on_app_moved(result),
             Msg::Config(result) => self.on_config(result),
             Msg::ConfigSaved(result) => self.on_config_saved(result),
             Msg::Permissions(result) => self.on_permissions(result),
-            Msg::LoginChanged(result) => self.on_login_changed(result),
+            Msg::LoginChanged { host, result } => self.on_login_changed(host, result),
             Msg::Done(Ok(text)) => {
                 if !text.is_empty() {
                     self.toast(text, ToastKind::Info);
@@ -739,13 +793,9 @@ impl App {
                 }
             }
             FormKind::Credentials { host } => {
-                let opts = ConnectOptions {
-                    host: Some(host),
-                    username: Some(form.value(0).to_owned()),
-                    password: Some(form.fields[1].input.value.clone()),
-                    insecure: self.insecure,
-                    ..Default::default()
-                };
+                let mut opts = self.retry_options(host);
+                opts.username = Some(form.value(0).to_owned());
+                opts.password = Some(form.fields[1].input.value.clone());
                 self.start_connect(opts);
             }
             FormKind::AddHost => {
@@ -941,4 +991,98 @@ async fn fetch_info(client: &SunshineClient) -> Result<Info, ApiError> {
         clients: clients.ok().map(|c| c.len()),
         fingerprint: client.seen_fingerprint(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::widgets::{Field, Form, Input};
+
+    fn app() -> (App, tokio::sync::mpsc::UnboundedReceiver<Envelope>) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let dir = std::env::temp_dir().join(format!("sun-control-app-{}", std::process::id()));
+        let profiles = Profiles::load_from(dir.join("hosts.toml")).unwrap();
+        (App::new(profiles, false, tx), rx)
+    }
+
+    #[tokio::test]
+    async fn results_from_a_previous_connection_are_ignored() {
+        let (mut app, _rx) = app();
+        app.connect_to("host-a");
+        let stale = app.session;
+        app.connect_to("host-b");
+
+        app.on_envelope(Envelope {
+            session: stale,
+            msg: Msg::Apps(Ok(vec![SunApp::default()])),
+        });
+        assert!(
+            matches!(app.apps.list, Load::Idle),
+            "stale app list was applied"
+        );
+
+        // A password change that finishes after switching must not reconnect
+        // host-b with host-a's new credentials.
+        let before = app.session;
+        let creds = Credentials {
+            username: "admin".into(),
+            password: "new-a".into(),
+        };
+        app.on_envelope(Envelope {
+            session: stale,
+            msg: Msg::LoginChanged {
+                host: "host-a".into(),
+                result: Ok(creds),
+            },
+        });
+        assert_eq!(
+            app.session, before,
+            "stale login change started a connection"
+        );
+        assert!(
+            app.pending_connect
+                .as_ref()
+                .is_some_and(|o| o.password.is_none())
+        );
+        assert!(
+            app.toast
+                .as_ref()
+                .is_some_and(|t| t.text.contains("host-a"))
+        );
+    }
+
+    #[tokio::test]
+    async fn trust_and_sign_in_keep_each_others_answers() {
+        let (mut app, _rx) = app();
+        app.connect_to("box:47990");
+        app.run_action(Action::Trust {
+            host: "box:47990".into(),
+            fingerprint: "AA:BB".into(),
+        });
+        let form = Form::new(
+            "Sign in",
+            FormKind::Credentials {
+                host: "box:47990".into(),
+            },
+            vec![
+                Field::new("Username", Input::new("admin")),
+                Field::new("Password", Input::new("pw")),
+            ],
+        );
+        app.submit_form(form);
+        let opts = app.pending_connect.clone().unwrap();
+        assert_eq!(
+            opts.accept_fingerprint.as_deref(),
+            Some("AA:BB"),
+            "sign-in dropped the accepted certificate"
+        );
+        assert_eq!(opts.username.as_deref(), Some("admin"));
+
+        // And accepting a certificate after signing in keeps the login.
+        app.run_action(Action::Trust {
+            host: "box:47990".into(),
+            fingerprint: "AA:BB".into(),
+        });
+        assert_eq!(app.pending_connect.unwrap().password.as_deref(), Some("pw"));
+    }
 }

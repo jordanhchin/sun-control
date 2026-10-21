@@ -14,6 +14,14 @@ pub enum ApiError {
     CertificateMismatch,
     #[error("Sunshine reported an error: {0}")]
     Server(String),
+    #[error(
+        "unexpected response from {path}; is a proxy or login page in the way? (got: {snippet})"
+    )]
+    Unexpected { path: String, snippet: String },
+    #[error(
+        "Sunshine redirected {path} to {location}; redirects aren't followed so credentials can't leak"
+    )]
+    Redirected { path: String, location: String },
     /// A local problem while carrying out an API-backed task, e.g. writing a file.
     #[error("{0}")]
     Local(String),

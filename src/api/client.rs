@@ -28,6 +28,32 @@ pub struct SunshineClient {
     seen_fingerprint: Arc<Mutex<Option<String>>>,
 }
 
+/// Sunshine answers actions with a JSON envelope like `{"status": true}`.
+/// Anything else that still came back as HTTP 200 (an HTML login page from a
+/// proxy, say) must not be mistaken for success.
+fn check_action_response(path: &str, text: &str) -> Result<()> {
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(obj)) => match obj.get("status") {
+            // Newer fields or a missing status are tolerated; an explicit failure is not.
+            Some(status) if !status.is_null() && !super::types::truthy(status) => {
+                Err(ApiError::Server(
+                    obj.get("error")
+                        .and_then(Value::as_str)
+                        .map_or_else(|| format!("{path} failed"), str::to_owned),
+                ))
+            }
+            _ => Ok(()),
+        },
+        _ => Err(ApiError::Unexpected {
+            path: path.to_owned(),
+            snippet: text.chars().take(60).collect::<String>().replace('\n', " "),
+        }),
+    }
+}
+
 impl SunshineClient {
     pub fn new(base: Url, trust: Trust, creds: Option<Credentials>) -> Result<Self> {
         let seen = Arc::new(Mutex::new(None));
@@ -35,6 +61,9 @@ impl SunshineClient {
             .tls_backend_preconfigured(tls::client_config(trust, seen.clone()))
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(30))
+            // Never follow redirects: request bodies carry passwords, and a
+            // redirect could forward them to another origin or to plain http.
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
         Ok(Self {
             http,
@@ -105,9 +134,18 @@ impl SunshineClient {
         }
         let resp = req.send().await.map_err(|e| self.map_send_error(e))?;
         let status = resp.status();
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|l| l.to_str().ok())
+            .map(str::to_owned);
         let text = resp.text().await?;
         match status {
             s if s.is_success() => Ok(text),
+            s if s.is_redirection() => Err(ApiError::Redirected {
+                path: path.to_owned(),
+                location: location.unwrap_or_else(|| "an unknown location".into()),
+            }),
             StatusCode::UNAUTHORIZED => Err(ApiError::Unauthorized),
             StatusCode::NOT_FOUND
             | StatusCode::METHOD_NOT_ALLOWED
@@ -145,13 +183,7 @@ impl SunshineClient {
     /// For endpoints that answer with a status envelope, turn `status: false` into an error.
     async fn action(&self, method: Method, path: &str, body: Option<&Value>) -> Result<()> {
         let text = self.send(method, path, body).await?;
-        match serde_json::from_str::<Status>(&text) {
-            Ok(st) if !st.ok() && !st.status.is_null() => Err(ApiError::Server(
-                st.error.unwrap_or_else(|| format!("{path} failed")),
-            )),
-            // Non-JSON or status-less success bodies are fine.
-            _ => Ok(()),
-        }
+        check_action_response(path, &text)
     }
 
     pub async fn config(&self) -> Result<Config> {

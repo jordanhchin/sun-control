@@ -113,3 +113,57 @@ async fn pairs_with_a_pending_request() {
         other => panic!("unexpected {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn never_follows_redirects_with_credentials() {
+    let server = MockServer::start().await;
+    let elsewhere = MockServer::start().await;
+    Mock::given(path("/api/password"))
+        .respond_with(
+            ResponseTemplate::new(307)
+                .insert_header("Location", format!("{}/steal", elsewhere.uri())),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/steal"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": true})))
+        .expect(0)
+        .mount(&elsewhere)
+        .await;
+
+    let api = client(&server);
+    let creds = Credentials {
+        username: "admin".into(),
+        password: "pw".into(),
+    };
+    let new = Credentials {
+        username: "admin".into(),
+        password: "secret".into(),
+    };
+    match api.change_credentials(&creds, &new).await {
+        Err(ApiError::Redirected { location, .. }) => assert!(location.ends_with("/steal")),
+        other => panic!("unexpected {other:?}"),
+    }
+    // `elsewhere` verifies on drop that it received nothing.
+}
+
+#[tokio::test]
+async fn rejects_unexpected_success_bodies() {
+    let server = MockServer::start().await;
+    Mock::given(path("/api/config"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>Sign in</html>"))
+        .mount(&server)
+        .await;
+    Mock::given(path("/api/apps/close"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let api = client(&server);
+    assert!(matches!(
+        api.save_config(&serde_json::Map::new()).await,
+        Err(ApiError::Unexpected { .. })
+    ));
+    // An empty 200 is still fine.
+    api.close_app().await.unwrap();
+}

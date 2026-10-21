@@ -64,9 +64,11 @@ chmod 755 "$tmp/$asset"
 "$tmp/$asset" --version >/dev/null 2>&1 || die "the downloaded binary doesn't run on this machine"
 
 mkdir -p "$INSTALL_DIR"
-# Copy then rename, so a running sun-control is replaced atomically.
-cp "$tmp/$asset" "$INSTALL_DIR/.sun-control.new"
-mv -f "$INSTALL_DIR/.sun-control.new" "$INSTALL_DIR/sun-control"
+# Stage under a unique, exclusively created name (never an existing file or
+# symlink), then rename so a running sun-control is replaced atomically.
+staged=$(mktemp "$INSTALL_DIR/.sun-control.XXXXXX") || die "can't write to $INSTALL_DIR"
+cat "$tmp/$asset" > "$staged" && chmod 755 "$staged" && mv -f "$staged" "$INSTALL_DIR/sun-control" ||
+    { rm -f "$staged"; die "couldn't install to $INSTALL_DIR"; }
 
 say "Installed $("$INSTALL_DIR/sun-control" --version) to $INSTALL_DIR/sun-control"
 case ":$PATH:" in

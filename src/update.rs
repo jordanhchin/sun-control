@@ -156,19 +156,37 @@ pub async fn install(release: &Release) -> Result<PathBuf> {
     Ok(exe)
 }
 
+#[cfg(unix)]
 fn replace_executable(exe: &Path, binary: &[u8]) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
     let dir = exe.parent().context("executable has no parent directory")?;
-    let tmp = dir.join(".sun-control.update");
+    // A unique name, created exclusively: an existing file or symlink at that
+    // path makes this fail rather than being written through.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let tmp = dir.join(format!(
+        ".sun-control.update-{}-{nanos}",
+        std::process::id()
+    ));
     let write = || -> std::io::Result<()> {
-        std::fs::write(&tmp, binary)?;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&tmp)?;
+        file.write_all(binary)?;
+        // Set permissions through the handle, never by path.
+        file.set_permissions(std::fs::Permissions::from_mode(0o755))?;
+        file.sync_all()
     };
     if let Err(e) = write() {
         let _ = std::fs::remove_file(&tmp);
         if e.kind() == std::io::ErrorKind::PermissionDenied {
             bail!(
-                "can't write to {}; it was probably installed by a package manager or as root — update it the same way",
+                "can't write to {}; it was probably installed by a package manager or as root, so update it the same way",
                 dir.display()
             );
         }
@@ -186,6 +204,11 @@ fn replace_executable(exe: &Path, binary: &[u8]) -> Result<()> {
     // Renaming over a running executable is safe on Linux.
     std::fs::rename(&tmp, exe).context("replacing the executable")?;
     Ok(())
+}
+
+#[cfg(not(unix))]
+fn replace_executable(_exe: &Path, _binary: &[u8]) -> Result<()> {
+    bail!("self-update is only supported on Linux; update with `cargo install` instead")
 }
 
 #[cfg(test)]
@@ -213,6 +236,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn replaces_executable_atomically() {
         let dir = std::env::temp_dir().join(format!("sun-control-upd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -224,7 +248,38 @@ mod tests {
         // One that fails to run is rejected and leaves the original alone.
         assert!(replace_executable(&exe, b"#!/bin/sh\nexit 3\n").is_err());
         assert_eq!(std::fs::read(&exe).unwrap(), b"#!/bin/sh\nexit 0\n");
-        assert!(!dir.join(".sun-control.update").exists());
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(
+            leftovers,
+            vec![std::ffi::OsString::from("sun-control")],
+            "staging files left behind"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn staging_never_writes_through_symlinks() {
+        let dir = std::env::temp_dir().join(format!("sun-control-sym-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("sun-control");
+        std::fs::write(&exe, b"old").unwrap();
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"keep me").unwrap();
+        // The old predictable staging name, pointing at another file.
+        std::os::unix::fs::symlink(&victim, dir.join(".sun-control.update")).unwrap();
+        replace_executable(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+        assert!(
+            !std::fs::symlink_metadata(&exe)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

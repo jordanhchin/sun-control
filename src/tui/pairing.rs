@@ -131,10 +131,9 @@ impl App {
         };
         self.pairing.in_flight = true;
         self.pairing.at = Some(Instant::now());
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
+        self.spawn(async move {
             let (pending, clients) = tokio::join!(client.pending_pairings(), client.clients());
-            let _ = tx.send(Msg::Pairing { pending, clients });
+            Msg::Pairing { pending, clients }
         });
     }
 

@@ -156,10 +156,7 @@ impl App {
         let Some(client) = self.client().cloned() else {
             return;
         };
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let _ = tx.send(Msg::Permissions(client.permissions().await));
-        });
+        self.spawn(async move { Msg::Permissions(client.permissions().await) });
     }
 
     pub(super) fn on_permissions(&mut self, result: Result<Vec<Permission>, ApiError>) {
@@ -297,6 +294,9 @@ impl App {
         let Some(client) = self.client().cloned() else {
             return;
         };
+        let Some(host) = self.current_host().map(str::to_owned) else {
+            return;
+        };
         let current = Credentials {
             username: cur_user.trim().to_owned(),
             password: cur_pass,
@@ -305,22 +305,20 @@ impl App {
             username: new_user.trim().to_owned(),
             password: new_pass,
         };
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
+        self.spawn(async move {
             let result = client
                 .change_credentials(&current, &new)
                 .await
                 .map(|()| new);
-            let _ = tx.send(Msg::LoginChanged(result));
+            Msg::LoginChanged { host, result }
         });
     }
 
-    pub(super) fn on_login_changed(&mut self, result: Result<Credentials, ApiError>) {
+    /// Only called for the session that made the change (stale sessions are
+    /// dropped), so `host` is the one we're still connected to.
+    pub(super) fn on_login_changed(&mut self, host: String, result: Result<Credentials, ApiError>) {
         match result {
             Ok(new) => {
-                let Some(host) = self.current_host().map(str::to_owned) else {
-                    return;
-                };
                 if let Some(h) = self.profiles.hosts.get_mut(&host)
                     && h.username.is_some()
                 {
