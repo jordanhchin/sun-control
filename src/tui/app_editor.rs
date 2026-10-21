@@ -124,6 +124,9 @@ pub struct AppEditor {
     prep: Vec<(Input, Input, PrepCmd)>,
     focus: usize,
     scroll: usize,
+    /// Re-adding an app a failed reorder displaced; it stays queued until
+    /// the server confirms the save.
+    pub recovery: bool,
     dirty: bool,
     /// Set after the first Esc on a dirty editor.
     confirm_discard: bool,
@@ -154,6 +157,7 @@ impl AppEditor {
         };
         Self {
             index,
+            recovery: false,
             name: Input::new(app.name.clone()),
             command: Input::new(app.cmd.clone().unwrap_or_default()),
             output: Input::new(extra_str(&app, "output")),

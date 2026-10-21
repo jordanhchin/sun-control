@@ -30,6 +30,8 @@ pub struct AppsState {
     pub moving: Moving,
     /// Apps a failed reorder displaced, still to be offered for re-adding.
     pub recover: Vec<SunApp>,
+    /// The last app list requested; earlier responses are stale.
+    pub request: u64,
 }
 
 /// Why a reorder failed, and any apps the server may no longer have.
@@ -109,6 +111,7 @@ impl Default for AppsState {
             table: TableState::default().with_selected(Some(0)),
             moving: Moving::No,
             recover: Vec::new(),
+            request: 0,
         }
     }
 }
@@ -129,13 +132,16 @@ impl AppsState {
 
 impl App {
     pub(super) fn load_apps(&mut self) {
+        // Supersede every earlier request, even if this one can't be sent.
+        self.apps.request += 1;
+        let request = self.apps.request;
         let Some(client) = self.client().cloned() else {
             return;
         };
         if !matches!(self.apps.list, Load::Ready(_)) {
             self.apps.list = Load::Loading;
         }
-        self.spawn(async move { Msg::Apps(client.apps().await.map(|l| l.apps)) });
+        self.spawn(async move { Msg::Apps(request, client.apps().await.map(|l| l.apps)) });
     }
 
     fn platform(&self) -> Option<String> {
@@ -279,9 +285,44 @@ impl App {
         if self.modal.is_some() {
             return;
         }
-        if let Some(app) = self.apps.recover.pop() {
-            let editor = AppEditor::new(app, None, self.platform().as_deref());
+        // Left queued until the server confirms it has the app again.
+        if let Some(app) = self.apps.recover.last().cloned() {
+            let mut editor = AppEditor::new(app, None, self.platform().as_deref());
+            editor.recovery = true;
             self.modal = Some(Modal::Editor(Box::new(editor)));
+        }
+    }
+
+    fn save_recovered(&mut self, editor: Box<AppEditor>, app: SunApp) {
+        let Some(client) = self.client().cloned() else {
+            self.modal = Some(Modal::Editor(editor));
+            return;
+        };
+        self.toast(format!("Saving “{}”…", app.name), ToastKind::Info);
+        self.spawn(async move {
+            Msg::Recovered(match client.save_app(&app, None).await {
+                Ok(()) => Ok(format!("Re-added “{}”", app.name)),
+                Err(e) => Err((e.to_string(), editor)),
+            })
+        });
+    }
+
+    pub(super) fn on_recovered(&mut self, result: Result<String, (String, Box<AppEditor>)>) {
+        match result {
+            Ok(text) => {
+                self.apps.recover.pop();
+                self.toast(text, ToastKind::Info);
+                self.load_apps();
+                self.next_recovered_app();
+            }
+            Err((e, mut editor)) => {
+                // Hand the edits back for another try.
+                self.toast(format!("Couldn't save: {e}"), ToastKind::Error);
+                editor.error = Some(e);
+                if self.modal.is_none() {
+                    self.modal = Some(Modal::Editor(editor));
+                }
+            }
         }
     }
 
@@ -295,6 +336,9 @@ impl App {
                 return;
             }
         };
+        if editor.recovery {
+            return self.save_recovered(editor, app);
+        }
         let index = editor.index;
         let name = app.name.clone();
         if index.is_none() {

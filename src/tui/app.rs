@@ -157,7 +157,10 @@ pub enum Msg {
     },
     Info(Result<Info, ApiError>),
     Logs(Result<String, ApiError>),
-    Apps(Result<Vec<SunApp>, ApiError>),
+    /// An app list, tagged with the request it answers.
+    Apps(u64, Result<Vec<SunApp>, ApiError>),
+    /// A displaced app was (or wasn't) saved back; failures return the editor.
+    Recovered(Result<String, (String, Box<AppEditor>)>),
     AppMoved(Result<(), MoveFailure>),
     Pairing {
         pending: Result<Vec<PendingPairing>, ApiError>,
@@ -540,10 +543,11 @@ impl App {
                     Err(e) => self.logs.status = super::logs::LogStatus::Failed(e.to_string()),
                 }
             }
-            // A list fetched before a reorder finished would undo its
-            // optimistic order; the reload after it settles things.
-            Msg::Apps(_) if self.apps.moving == Moving::Saving => {}
-            Msg::Apps(result) => {
+            // Only the latest request counts, and none while a reorder is
+            // saving: an older list would restore indices that are now wrong.
+            Msg::Apps(request, _)
+                if request != self.apps.request || self.apps.moving == Moving::Saving => {}
+            Msg::Apps(_, result) => {
                 self.apps.moving = Moving::No;
                 self.apps.list = match result {
                     Ok(list) => Load::Ready(list),
@@ -560,6 +564,7 @@ impl App {
             }
             Msg::Pairing { pending, clients } => self.pairing.set(pending, clients),
             Msg::AppMoved(result) => self.on_app_moved(result),
+            Msg::Recovered(result) => self.on_recovered(result),
             Msg::Config(result) => self.on_config(result),
             Msg::ConfigSaved(result) => self.on_config_saved(result),
             Msg::Permissions(result) => self.on_permissions(result),
@@ -756,11 +761,14 @@ impl App {
             Modal::Picker(picker) => self.picker_key(picker, key),
             Modal::Palette(palette) => self.palette_key(*palette, key),
             Modal::Editor(mut editor) => match editor.handle(key) {
-                EditorEvent::Save => {
-                    self.save_editor(editor);
+                EditorEvent::Save => self.save_editor(editor),
+                EditorEvent::Cancel => {
+                    if editor.recovery {
+                        // Declining to re-add is the only way to drop it.
+                        self.apps.recover.pop();
+                    }
                     self.next_recovered_app();
                 }
-                EditorEvent::Cancel => self.next_recovered_app(),
                 EditorEvent::None => self.modal = Some(Modal::Editor(editor)),
             },
             Modal::Confirm(c) => match key.code {
@@ -1033,7 +1041,7 @@ mod tests {
 
         app.on_envelope(Envelope {
             session: stale,
-            msg: Msg::Apps(Ok(vec![SunApp::default()])),
+            msg: Msg::Apps(app.apps.request, Ok(vec![SunApp::default()])),
         });
         assert!(
             matches!(app.apps.list, Load::Idle),
@@ -1136,15 +1144,22 @@ mod tests {
             name: n.into(),
             ..Default::default()
         };
+        let list = |names: &[&str]| names.iter().map(|n| named(n)).collect::<Vec<_>>();
+        let deliver = |app: &mut App, request, apps| {
+            let session = app.session;
+            app.on_envelope(Envelope {
+                session,
+                msg: Msg::Apps(request, Ok(apps)),
+            });
+        };
+        // A refresh in flight when the move starts.
+        app.load_apps();
+        let early = app.apps.request;
         // Optimistically swapped to [B, A] while saving.
-        app.apps.list = Load::Ready(vec![named("B"), named("A")]);
+        app.apps.list = Load::Ready(list(&["B", "A"]));
         app.apps.moving = Moving::Saving;
-        // A list fetched before the move finished is ignored.
-        app.on_envelope(Envelope {
-            session: app.session,
-            msg: Msg::Apps(Ok(vec![named("A"), named("B")])),
-        });
-        assert!(matches!(&app.apps.list, Load::Ready(l) if l[0].name == "B"));
+        deliver(&mut app, early, list(&["A", "B"]));
+        assert_eq!(app.apps.apps()[0].name, "B", "list applied mid-save");
 
         app.on_app_moved(Err(MoveFailure {
             message: "boom".into(),
@@ -1152,13 +1167,40 @@ mod tests {
             uncertain: false,
         }));
         assert!(app.apps.apps().is_empty(), "optimistic order still shown");
+        // The early refresh arriving late must not unlock or replace anything.
+        deliver(&mut app, early, list(&["A", "A"]));
         assert_eq!(app.apps.moving, Moving::Reloading);
-        // The reload after the move unlocks the list.
-        app.on_envelope(Envelope {
-            session: app.session,
-            msg: Msg::Apps(Ok(vec![named("A"), named("B")])),
-        });
+        assert!(app.apps.apps().is_empty());
+        // Only the reload after the move does.
+        let reload = app.apps.request;
+        deliver(&mut app, reload, list(&["B", "A"]));
         assert_eq!(app.apps.moving, Moving::No);
-        assert_eq!(app.apps.apps()[0].name, "A");
+        assert_eq!(app.apps.apps()[0].name, "B");
+    }
+
+    #[tokio::test]
+    async fn a_displaced_app_is_kept_until_it_is_saved() {
+        let (mut app, _rx) = app();
+        app.apps.recover.push(SunApp {
+            name: "B".into(),
+            ..Default::default()
+        });
+        app.next_recovered_app();
+        let Some(Modal::Editor(editor)) = app.modal.take() else {
+            panic!("no recovery editor");
+        };
+        assert!(editor.recovery);
+        assert_eq!(app.apps.recover.len(), 1, "dropped before saving");
+
+        app.on_recovered(Err(("HTTP 500".into(), editor)));
+        assert_eq!(app.apps.recover.len(), 1);
+        let Some(Modal::Editor(editor)) = app.modal.take() else {
+            panic!("editor not handed back after a failed save");
+        };
+        assert!(editor.recovery && editor.error.is_some());
+
+        app.on_recovered(Ok("Re-added “B”".into()));
+        assert!(app.apps.recover.is_empty());
+        assert!(app.modal.is_none());
     }
 }
