@@ -69,9 +69,18 @@ impl SunshineClient {
         if msg.contains("fingerprint mismatch") {
             ApiError::CertificateMismatch
         } else if e.is_connect() || e.is_timeout() {
+            let mut cause: &dyn std::error::Error = &e;
+            while let Some(next) = cause.source() {
+                cause = next;
+            }
+            let reason = if e.is_timeout() {
+                "timed out".to_owned()
+            } else {
+                cause.to_string()
+            };
             ApiError::Connect {
-                url: self.base.to_string(),
-                source: e,
+                url: self.base.as_str().trim_end_matches('/').to_owned(),
+                reason,
             }
         } else {
             ApiError::Request(e)

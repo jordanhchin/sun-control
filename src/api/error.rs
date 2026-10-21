@@ -20,12 +20,10 @@ pub enum ApiError {
         path: String,
         body: String,
     },
-    #[error("could not reach Sunshine at {url}")]
-    Connect {
-        url: String,
-        #[source]
-        source: reqwest::Error,
-    },
+    /// `reason` is the innermost cause (e.g. "Connection refused"), since
+    /// reqwest's own message repeats the URL several times.
+    #[error("could not reach Sunshine at {url}: {reason}")]
+    Connect { url: String, reason: String },
     #[error(transparent)]
     Request(#[from] reqwest::Error),
     #[error("unexpected response from {path}: {source}")]

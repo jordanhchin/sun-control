@@ -192,7 +192,10 @@ async fn hosts(cmd: HostsCmd, profiles: &mut Profiles, opts: &ConnectOptions) ->
             username,
             password_cmd,
         } => {
-            let url = profiles::normalize_url(&url)?.to_string();
+            let url = profiles::normalize_url(&url)?
+                .as_str()
+                .trim_end_matches('/')
+                .to_owned();
             profiles.hosts.insert(
                 name.clone(),
                 Host {

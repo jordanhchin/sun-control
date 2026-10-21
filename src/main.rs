@@ -1,5 +1,6 @@
 mod cli;
 mod commands;
+mod tui;
 
 use clap::Parser;
 
@@ -23,11 +24,19 @@ async fn run() -> anyhow::Result<()> {
         username: cli.conn.user,
         password: cli.conn.password,
         insecure: cli.conn.insecure,
+        interactive: true,
+        accept_fingerprint: None,
     };
     match cli.command {
         Some(cmd) => commands::run(cmd, &mut profiles, &opts).await,
-        None => anyhow::bail!(
-            "the interactive TUI is not built yet; see `sun-control --help` for commands"
-        ),
+        None => {
+            // The TUI asks for missing credentials and trust in its own dialogs.
+            let opts = ConnectOptions {
+                interactive: false,
+                ..opts
+            };
+            let initial = sun_control::connect::connect(&mut profiles, &opts).await;
+            tui::run(profiles, &opts, initial).await
+        }
     }
 }

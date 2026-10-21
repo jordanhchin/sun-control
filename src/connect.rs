@@ -1,9 +1,13 @@
 //! Resolve a host profile into an authenticated, certificate-pinned client.
+//!
+//! In interactive mode missing information is asked for on the terminal. In
+//! non-interactive mode (the TUI) it is reported back as a [`ConnectError`]
+//! so the caller can ask for it itself and retry.
 
 use std::io::{IsTerminal, Write};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use thiserror::Error;
 
 use crate::api::tls::Trust;
 use crate::api::{Credentials, SunshineClient};
@@ -16,20 +20,48 @@ pub struct ConnectOptions {
     pub username: Option<String>,
     pub password: Option<String>,
     pub insecure: bool,
+    /// Prompt on the terminal for anything missing.
+    pub interactive: bool,
+    /// A fingerprint the user has already agreed to trust.
+    pub accept_fingerprint: Option<String>,
 }
 
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    #[error("the certificate for {url} is not trusted yet (SHA-256 {fingerprint})")]
+    NeedsTrust { url: String, fingerprint: String },
+    #[error("credentials are required{}", reason.as_ref().map(|r| format!(": {r}")).unwrap_or_default())]
+    NeedsCredentials {
+        username: Option<String>,
+        /// Why stored credentials couldn't be used, e.g. a failing password_cmd.
+        reason: Option<String>,
+    },
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl From<crate::api::ApiError> for ConnectError {
+    fn from(e: crate::api::ApiError) -> Self {
+        ConnectError::Other(e.into())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Connection {
     pub name: String,
     pub client: SunshineClient,
 }
 
-pub async fn connect(profiles: &mut Profiles, opts: &ConnectOptions) -> Result<Connection> {
+pub async fn connect(
+    profiles: &mut Profiles,
+    opts: &ConnectOptions,
+) -> Result<Connection, ConnectError> {
     let target = opts
         .host
         .clone()
         .unwrap_or_else(|| profiles.default_name().to_owned());
     // A known profile name wins; anything else is treated as an ad-hoc address.
-    let (name, mut host) = match profiles.hosts.get(&target) {
+    let (name, host) = match profiles.hosts.get(&target) {
         Some(h) => (Some(target.clone()), h.clone()),
         None => (
             None,
@@ -49,9 +81,20 @@ pub async fn connect(profiles: &mut Profiles, opts: &ConnectOptions) -> Result<C
         let fp = SunshineClient::new(url.clone(), Trust::Any, None)?
             .probe_fingerprint()
             .await?;
-        confirm_trust(&url, &fp)?;
+        let accepted = opts
+            .accept_fingerprint
+            .as_deref()
+            .is_some_and(|a| a.eq_ignore_ascii_case(&fp));
+        if !accepted && !profiles::is_loopback(&url) {
+            if !opts.interactive {
+                return Err(ConnectError::NeedsTrust {
+                    url: url.to_string(),
+                    fingerprint: fp,
+                });
+            }
+            confirm_trust(&url, &fp)?;
+        }
         if let Some(n) = &name {
-            host.fingerprint = Some(fp.clone());
             profiles.get_mut(n)?.fingerprint = Some(fp.clone());
             profiles.save()?;
         }
@@ -66,16 +109,13 @@ pub async fn connect(profiles: &mut Profiles, opts: &ConnectOptions) -> Result<C
     })
 }
 
-fn confirm_trust(url: &url::Url, fp: &str) -> Result<()> {
-    if profiles::is_loopback(url) {
-        return Ok(());
-    }
+fn confirm_trust(url: &url::Url, fp: &str) -> anyhow::Result<()> {
     eprintln!("The certificate for {url} is not yet trusted.\nSHA-256 fingerprint: {fp}");
     eprintln!(
         "Compare it on the host with:\n  openssl x509 -noout -fingerprint -sha256 -in ~/.config/sunshine/credentials/cacert.pem"
     );
     if !std::io::stdin().is_terminal() {
-        bail!(
+        anyhow::bail!(
             "refusing to trust an unknown certificate non-interactively (use --insecure to skip verification)"
         );
     }
@@ -84,42 +124,76 @@ fn confirm_trust(url: &url::Url, fp: &str) -> Result<()> {
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     if !matches!(answer.trim(), "y" | "Y" | "yes") {
-        bail!("certificate not trusted");
+        anyhow::bail!("certificate not trusted");
     }
     Ok(())
 }
 
-fn credentials(host: &profiles::Host, opts: &ConnectOptions) -> Result<Credentials> {
+fn credentials(host: &profiles::Host, opts: &ConnectOptions) -> Result<Credentials, ConnectError> {
+    let can_prompt = opts.interactive && std::io::stdin().is_terminal();
     let username = match opts.username.clone().or_else(|| host.username.clone()) {
         Some(u) => u,
-        None => prompt("Sunshine username: ")?,
-    };
-    let password = if let Some(p) = &opts.password {
-        p.clone()
-    } else if let Some(cmd) = &host.password_cmd {
-        let out = Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .output()
-            .with_context(|| format!("running password_cmd `{cmd}`"))?;
-        if !out.status.success() {
-            bail!("password_cmd `{cmd}` failed");
+        None if can_prompt => prompt("Sunshine username: ")?,
+        None => {
+            return Err(ConnectError::NeedsCredentials {
+                username: None,
+                reason: None,
+            });
         }
-        String::from_utf8(out.stdout)?
-            .trim_end_matches(['\r', '\n'])
-            .to_owned()
-    } else if std::io::stdin().is_terminal() {
-        rpassword::prompt_password(format!("Password for {username}: "))?
-    } else {
-        bail!("no password available: set SUN_CONTROL_PASSWORD or a password_cmd for this host");
     };
+    let mut reason = None;
+    if let Some(p) = &opts.password {
+        return Ok(Credentials {
+            username,
+            password: p.clone(),
+        });
+    }
+    if let Some(cmd) = &host.password_cmd {
+        match run_password_cmd(cmd) {
+            Ok(password) => return Ok(Credentials { username, password }),
+            // Fall back to asking rather than leaving the host unreachable.
+            Err(e) => reason = Some(format!("{e:#}")),
+        }
+    }
+    if !can_prompt {
+        return Err(ConnectError::NeedsCredentials {
+            username: Some(username),
+            reason,
+        });
+    }
+    if let Some(r) = &reason {
+        eprintln!("warning: {r}");
+    }
+    let password = rpassword::prompt_password(format!("Password for {username}: "))
+        .map_err(anyhow::Error::from)?;
     Ok(Credentials { username, password })
 }
 
-fn prompt(label: &str) -> Result<String> {
-    if !std::io::stdin().is_terminal() {
-        bail!("no username available: pass --user or set SUN_CONTROL_USER");
+fn run_password_cmd(cmd: &str) -> anyhow::Result<String> {
+    use anyhow::Context;
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .output()
+        .with_context(|| format!("running password_cmd `{cmd}`"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let detail = stderr.lines().last().unwrap_or("").trim();
+        anyhow::bail!(
+            "password_cmd `{cmd}` failed: {}",
+            if detail.is_empty() {
+                "no error output"
+            } else {
+                detail
+            }
+        );
     }
+    Ok(String::from_utf8(out.stdout)?
+        .trim_end_matches(['\r', '\n'])
+        .to_owned())
+}
+
+fn prompt(label: &str) -> anyhow::Result<String> {
     eprint!("{label}");
     std::io::stderr().flush().ok();
     let mut s = String::new();
