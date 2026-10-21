@@ -3,6 +3,7 @@
 mod app;
 mod app_editor;
 mod apps;
+mod config;
 mod logs;
 mod pairing;
 mod ui;

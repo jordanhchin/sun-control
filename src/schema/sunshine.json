@@ -1,0 +1,1469 @@
+{
+ "generated_from": "Config-CuV8MZPw.js",
+ "tabs": [
+  {
+   "id": "general",
+   "name": "General",
+   "fields": [
+    {
+     "key": "locale",
+     "label": "Locale",
+     "kind": "enum",
+     "default": "en",
+     "desc": "The locale used for Sunshine's user interface.",
+     "options": [
+      {
+       "value": "bg",
+       "label": "Български (Bulgarian)"
+      },
+      {
+       "value": "cs",
+       "label": "Čeština (Czech)"
+      },
+      {
+       "value": "de",
+       "label": "Deutsch (German)"
+      },
+      {
+       "value": "en",
+       "label": "English"
+      },
+      {
+       "value": "en_GB",
+       "label": "English, United Kingdom"
+      },
+      {
+       "value": "en_US",
+       "label": "English, United States"
+      },
+      {
+       "value": "es",
+       "label": "Español (Spanish)"
+      },
+      {
+       "value": "fr",
+       "label": "Français (French)"
+      },
+      {
+       "value": "hu",
+       "label": "Magyar (Hungarian)"
+      },
+      {
+       "value": "it",
+       "label": "Italiano (Italian)"
+      },
+      {
+       "value": "ja",
+       "label": "日本語 (Japanese)"
+      },
+      {
+       "value": "ko",
+       "label": "한국어 (Korean)"
+      },
+      {
+       "value": "pl",
+       "label": "Polski (Polish)"
+      },
+      {
+       "value": "pt",
+       "label": "Português (Portuguese)"
+      },
+      {
+       "value": "pt_BR",
+       "label": "Português, Brasileiro (Portuguese, Brazilian)"
+      },
+      {
+       "value": "ru",
+       "label": "Русский (Russian)"
+      },
+      {
+       "value": "sv",
+       "label": "svenska (Swedish)"
+      },
+      {
+       "value": "tr",
+       "label": "Türkçe (Turkish)"
+      },
+      {
+       "value": "uk",
+       "label": "Українська (Ukranian)"
+      },
+      {
+       "value": "vi",
+       "label": "Tiếng Việt (Vietnamese)"
+      },
+      {
+       "value": "zh",
+       "label": "简体中文 (Chinese Simplified)"
+      },
+      {
+       "value": "zh_TW",
+       "label": "繁體中文 (Chinese Traditional)"
+      }
+     ]
+    },
+    {
+     "key": "sunshine_name",
+     "label": "Sunshine Name",
+     "kind": "text",
+     "default": "",
+     "desc": "The name displayed by Moonlight. If not specified, the PC's hostname is used"
+    },
+    {
+     "key": "min_log_level",
+     "label": "Log Level",
+     "kind": "enum",
+     "default": 2,
+     "desc": "The minimum log level printed to standard out",
+     "options": [
+      {
+       "value": "0",
+       "label": "Verbose"
+      },
+      {
+       "value": "1",
+       "label": "Debug"
+      },
+      {
+       "value": "2",
+       "label": "Info"
+      },
+      {
+       "value": "3",
+       "label": "Warning"
+      },
+      {
+       "value": "4",
+       "label": "Error"
+      },
+      {
+       "value": "5",
+       "label": "Fatal"
+      },
+      {
+       "value": "6",
+       "label": "None"
+      }
+     ]
+    },
+    {
+     "key": "global_prep_cmd",
+     "label": "Command Preparations",
+     "kind": "json",
+     "default": [],
+     "desc": "Configure a list of commands to be executed before or after running any application. If any of the specified preparation commands fail, the application launch process will be aborted."
+    },
+    {
+     "key": "notify_pre_releases",
+     "label": "PreRelease Notifications",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "Whether to be notified of new pre-release versions of Sunshine"
+    },
+    {
+     "key": "system_tray",
+     "label": "Enable system tray",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "Show icon in system tray and display desktop notifications"
+    }
+   ]
+  },
+  {
+   "id": "input",
+   "name": "Input",
+   "fields": [
+    {
+     "key": "controller",
+     "label": "Enable Gamepad Input",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "Allows guests to control the host system with a gamepad / controller"
+    },
+    {
+     "key": "gamepad_driver",
+     "label": "Gamepad Backend",
+     "kind": "enum",
+     "default": "",
+     "desc": "Choose which Windows gamepad backend Sunshine may use. All Available Drivers prefers Virtual HID Broker when licensed and falls back to ViGEmBus. Virtual HID Broker is an optional paid upgrade. ViGEmBus supports only Xbox 360 and DualShock 4, has limited features, and has reached end of life. None disables gamepads and broker notices without affecting keyboard or mouse input.",
+     "options": [
+      {
+       "value": "all",
+       "label": "All Available Drivers"
+      },
+      {
+       "value": "virtualhid",
+       "label": "Virtual HID Broker"
+      },
+      {
+       "value": "vigembus",
+       "label": "ViGEmBus"
+      },
+      {
+       "value": "none",
+       "label": "None (disable gamepads)"
+      }
+     ],
+     "platforms": [
+      "windows",
+      "macos"
+     ]
+    },
+    {
+     "key": "gamepad",
+     "label": "Emulated Gamepad Type",
+     "kind": "enum",
+     "default": "auto",
+     "desc": "Choose which type of gamepad to emulate on the host",
+     "options": [
+      {
+       "value": "auto",
+       "label": "Automatic"
+      },
+      {
+       "value": "generic",
+       "label": "Generic HID gamepad"
+      },
+      {
+       "value": "x360",
+       "label": "X360 (Xbox 360)"
+      },
+      {
+       "value": "xone",
+       "label": "XOne (Xbox One)"
+      },
+      {
+       "value": "xseries",
+       "label": "Xbox Series"
+      },
+      {
+       "value": "ds4",
+       "label": "DS4 (PS4)"
+      },
+      {
+       "value": "ds5",
+       "label": "DS5 (PS5)"
+      },
+      {
+       "value": "switch",
+       "label": "Nintendo Pro (Switch)"
+      }
+     ]
+    },
+    {
+     "key": "ds4_back_as_touchpad_click",
+     "label": "Map Back/Select to Touchpad Click",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "When using PlayStation-style gamepad emulation, map Back/Select to Touchpad Click"
+    },
+    {
+     "key": "motion_as_ds4",
+     "label": "Emulate a PlayStation-style gamepad if the client gamepad reports motion sensors are present",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "If disabled, motion sensors will not be taken into account during gamepad type selection."
+    },
+    {
+     "key": "touchpad_as_ds4",
+     "label": "Emulate a PlayStation-style gamepad if the client gamepad reports a touchpad is present",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "If disabled, touchpad presence will not be taken into account during gamepad type selection."
+    },
+    {
+     "key": "virtualhid_randomize_mac",
+     "label": "Randomize virtual controller MAC",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "Use a random MAC address for PlayStation-style virtual controllers instead of one based on the controller index. This avoids mixing per-controller settings when controllers are swapped on the client."
+    },
+    {
+     "key": "back_button_timeout",
+     "label": "Home/Guide Button Emulation Timeout",
+     "kind": "number",
+     "default": -1,
+     "desc": "If the Back/Select button is held down for the specified number of milliseconds, a Home/Guide button press is emulated. If set to a value < 0 (default), holding the Back/Select button will not emulate the Home/Guide button."
+    },
+    {
+     "key": "keyboard",
+     "label": "Enable Keyboard Input",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "Allows guests to control the host system with the keyboard"
+    },
+    {
+     "key": "key_repeat_delay",
+     "label": "Key Repeat Delay",
+     "kind": "number",
+     "default": 500,
+     "desc": "Control how fast keys will repeat themselves. The initial delay in milliseconds before repeating keys.",
+     "platforms": [
+      "windows"
+     ]
+    },
+    {
+     "key": "key_repeat_frequency",
+     "label": "Key Repeat Frequency",
+     "kind": "number",
+     "default": 24.9,
+     "desc": "How often keys repeat every second. This configurable option supports decimals.",
+     "platforms": [
+      "windows"
+     ]
+    },
+    {
+     "key": "always_send_scancodes",
+     "label": "Always Send Scancodes",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "Sending scancodes enhances compatibility with games and apps but may result in incorrect keyboard input from certain clients that aren't using a US English keyboard layout. Enable if keyboard input is not working at all in certain applications. Disable if keys on the client are generating the wrong input on the host."
+    },
+    {
+     "key": "key_rightalt_to_key_win",
+     "label": "Map Right Alt key to Windows key",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "It may be possible that you cannot send the Windows Key from Moonlight directly. In those cases it may be useful to make Sunshine think the Right Alt key is the Windows key"
+    },
+    {
+     "key": "mouse",
+     "label": "Enable Mouse Input",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "Allows guests to control the host system with the mouse"
+    },
+    {
+     "key": "high_resolution_scrolling",
+     "label": "High Resolution Scrolling Support",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "When enabled, Sunshine will pass through high resolution scroll events from Moonlight clients. This can be useful to disable for older applications that scroll too fast with high resolution scroll events."
+    },
+    {
+     "key": "native_pen_touch",
+     "label": "Native Pen/Touch Support",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "When enabled, Sunshine will pass through native pen/touch events from Moonlight clients. This can be useful to disable for older applications without native pen/touch support."
+    },
+    {
+     "key": "keybindings",
+     "label": "Keybindings",
+     "kind": "text",
+     "default": "[0x10,0xA0,0x11,0xA2,0x12,0xA4]",
+     "desc": "Remap Windows virtual-key codes received from Moonlight. Each row maps a source code to the code Sunshine sends to the host. Choose from the complete list of Microsoft-defined virtual-key codes. Incomplete or invalid rows are not saved."
+    }
+   ]
+  },
+  {
+   "id": "av",
+   "name": "Audio/Video",
+   "fields": [
+    {
+     "key": "audio_sink",
+     "label": "Audio Sink",
+     "kind": "text",
+     "default": ""
+    },
+    {
+     "key": "virtual_sink",
+     "label": "Virtual Sink",
+     "kind": "text",
+     "default": "",
+     "desc": "Manually specify a virtual audio device to use. If unset, the device is chosen automatically. We strongly recommend leaving this field blank to use automatic device selection!"
+    },
+    {
+     "key": "stream_audio",
+     "label": "Stream Audio",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "Whether to stream audio or not. Disabling this can be useful for streaming headless displays as second monitors."
+    },
+    {
+     "key": "install_steam_audio_drivers",
+     "label": "Install Steam Audio Drivers",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "If Steam is installed, this will automatically install the Steam Streaming Speakers driver to support 5.1/7.1 surround sound and muting host audio."
+    },
+    {
+     "key": "external_audio",
+     "label": "Externally Managed Audio",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "Capture only the configured Audio Sink without changing Windows defaults or device formats. Requires an explicit Audio Sink. Virtual Sink selection, automatic Steam audio driver installation, and Moonlight's host-playback toggle are ignored; manage playback and application routing in your audio mixer."
+    },
+    {
+     "key": "adapter_name",
+     "label": "Adapter Name",
+     "kind": "text",
+     "default": ""
+    },
+    {
+     "key": "output_name",
+     "label": "Display Id",
+     "kind": "text",
+     "default": ""
+    },
+    {
+     "key": "dd_configuration_option",
+     "label": "Device configuration",
+     "kind": "toggle",
+     "default": "disabled"
+    },
+    {
+     "key": "dd_resolution_option",
+     "label": "Resolution",
+     "kind": "enum",
+     "default": "auto",
+     "options": [
+      {
+       "value": "disabled",
+       "label": "Do not change resolution"
+      },
+      {
+       "value": "auto",
+       "label": "Use resolution provided by the client (default)"
+      },
+      {
+       "value": "manual",
+       "label": "Use manually entered resolution"
+      }
+     ]
+    },
+    {
+     "key": "dd_manual_resolution",
+     "label": "Manual resolution",
+     "kind": "text",
+     "default": ""
+    },
+    {
+     "key": "dd_refresh_rate_option",
+     "label": "Refresh rate",
+     "kind": "enum",
+     "default": "auto",
+     "options": [
+      {
+       "value": "disabled",
+       "label": "Do not change refresh rate"
+      },
+      {
+       "value": "auto",
+       "label": "Use FPS value provided by the client (default)"
+      },
+      {
+       "value": "manual",
+       "label": "Use manually entered refresh rate"
+      }
+     ]
+    },
+    {
+     "key": "dd_manual_refresh_rate",
+     "label": "Manual refresh rate",
+     "kind": "text",
+     "default": ""
+    },
+    {
+     "key": "dd_hdr_option",
+     "label": "HDR",
+     "kind": "enum",
+     "default": "auto",
+     "options": [
+      {
+       "value": "disabled",
+       "label": "Do not change HDR settings"
+      },
+      {
+       "value": "auto",
+       "label": "Switch on/off the HDR mode as requested by the client (default)"
+      }
+     ]
+    },
+    {
+     "key": "dd_wa_hdr_toggle_delay",
+     "label": "High-contrast workaround for HDR",
+     "kind": "number",
+     "default": 0
+    },
+    {
+     "key": "dd_config_revert_delay",
+     "label": "Config revert delay",
+     "kind": "number",
+     "default": 3000.0,
+     "desc": "Additional delay in milliseconds to wait before reverting configuration when the app has been closed or the last session terminated. Main purpose is to provide a smoother transition when quickly switching between apps."
+    },
+    {
+     "key": "dd_config_revert_on_disconnect",
+     "label": "Config revert on disconnect",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "Revert configuration upon disconnect of all clients instead of app close or last session termination."
+    },
+    {
+     "key": "dd_mode_remapping",
+     "label": "Display mode remapping",
+     "kind": "json",
+     "default": {
+      "mixed": [],
+      "resolution_only": [],
+      "refresh_rate_only": []
+     }
+    },
+    {
+     "key": "max_bitrate",
+     "label": "Maximum Bitrate",
+     "kind": "number",
+     "default": 0,
+     "desc": "The maximum bitrate (in Kbps) that Sunshine will encode the stream at. If set to 0, it will always use the bitrate requested by Moonlight."
+    },
+    {
+     "key": "minimum_fps_target",
+     "label": "Minimum FPS Target",
+     "kind": "number",
+     "default": 0,
+     "desc": "The lowest effective FPS a stream can reach. A value of 0 is treated as roughly half of the stream's FPS. A setting of 20 is recommended if you stream 24 or 30fps content."
+    }
+   ]
+  },
+  {
+   "id": "network",
+   "name": "Network",
+   "fields": [
+    {
+     "key": "upnp",
+     "label": "UPnP",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "Automatically configure port forwarding for streaming over the Internet"
+    },
+    {
+     "key": "address_family",
+     "label": "Address Family",
+     "kind": "enum",
+     "default": "ipv4",
+     "desc": "Set the address family used by Sunshine",
+     "options": [
+      {
+       "value": "both",
+       "label": "IPv4+IPv6"
+      }
+     ]
+    },
+    {
+     "key": "bind_address",
+     "label": "Bind address",
+     "kind": "text",
+     "default": "",
+     "desc": "Set an IP address that exists on this host. An IPv4 address works with either address-family mode; an IPv6 address requires dual-stack mode. If left blank, Sunshine will bind to all available addresses for the configured address family."
+    },
+    {
+     "key": "port",
+     "label": "Port",
+     "kind": "number",
+     "default": 47989,
+     "desc": "Set the family of ports used by Sunshine"
+    },
+    {
+     "key": "origin_web_ui_allowed",
+     "label": "Origin Web UI Allowed",
+     "kind": "enum",
+     "default": "lan",
+     "desc": "The origin of the remote endpoint address that is not denied access to Web UI",
+     "options": [
+      {
+       "value": "pc",
+       "label": "Only localhost may access Web UI"
+      },
+      {
+       "value": "lan",
+       "label": "Only those in LAN may access Web UI"
+      },
+      {
+       "value": "wan",
+       "label": "Anyone may access Web UI"
+      }
+     ]
+    },
+    {
+     "key": "csrf_allowed_origins",
+     "label": "CSRF Allowed Origins",
+     "kind": "text",
+     "default": "",
+     "desc": "Comma-separated list of additional allowed origins for CSRF protection (appended to defaults: localhost variants and web UI port). Only add origins you trust. Each origin must include protocol and host (e.g., https://example.com)."
+    },
+    {
+     "key": "external_ip",
+     "label": "External IP",
+     "kind": "text",
+     "default": "",
+     "desc": "If no external IP address is given, Sunshine will automatically detect external IP"
+    },
+    {
+     "key": "lan_encryption_mode",
+     "label": "LAN Encryption Mode",
+     "kind": "enum",
+     "default": 0,
+     "desc": "This determines when encryption will be used when streaming over your local network. Encryption can reduce streaming performance, particularly on less powerful hosts and clients.",
+     "options": [
+      {
+       "value": "0",
+       "label": "Disabled (default)"
+      },
+      {
+       "value": "1",
+       "label": "Enabled for supported clients"
+      },
+      {
+       "value": "2",
+       "label": "Required for all clients"
+      }
+     ]
+    },
+    {
+     "key": "wan_encryption_mode",
+     "label": "WAN Encryption Mode",
+     "kind": "enum",
+     "default": 1,
+     "desc": "This determines when encryption will be used when streaming over the Internet. Encryption can reduce streaming performance, particularly on less powerful hosts and clients.",
+     "options": [
+      {
+       "value": "0",
+       "label": "Disabled"
+      },
+      {
+       "value": "1",
+       "label": "Enabled for supported clients (default)"
+      },
+      {
+       "value": "2",
+       "label": "Required for all clients"
+      }
+     ]
+    },
+    {
+     "key": "ping_timeout",
+     "label": "Ping Timeout",
+     "kind": "number",
+     "default": 10000.0,
+     "desc": "How long to wait in milliseconds for data from moonlight before shutting down the stream"
+    },
+    {
+     "key": "packetsize",
+     "label": "Packet Size Limit",
+     "kind": "number",
+     "default": 0,
+     "desc": "Limit the packet size to avoid fragmentation on a low MTU link. This helps reduce packet loss and micro-stuttering, while streaming over a layer 2 VPN to clients that cannot configure this value, e.g. Moonlight for Android/iOS. Reduce the bitrate when using low values. Values larger than 1456 require jumbo frames. Range: 0, 200-65535. A value of 0 will disable the limit."
+    }
+   ]
+  },
+  {
+   "id": "files",
+   "name": "Config Files",
+   "fields": [
+    {
+     "key": "file_apps",
+     "label": "Apps File",
+     "kind": "text",
+     "default": "",
+     "desc": "The file where current apps of Sunshine are stored."
+    },
+    {
+     "key": "credentials_file",
+     "label": "Credentials File",
+     "kind": "text",
+     "default": "",
+     "desc": "Store Username/Password separately from Sunshine's state file."
+    },
+    {
+     "key": "log_path",
+     "label": "Logfile Path",
+     "kind": "text",
+     "default": "",
+     "desc": "The file where the current Sunshine log is stored. At startup, up to five previous logs are retained with .1 through .5 suffixes."
+    },
+    {
+     "key": "pkey",
+     "label": "Private Key",
+     "kind": "text",
+     "default": "",
+     "desc": "The private key used for the web UI and Moonlight client pairing. For best compatibility, this should be an RSA-2048 private key."
+    },
+    {
+     "key": "cert",
+     "label": "Certificate",
+     "kind": "text",
+     "default": "",
+     "desc": "The certificate used for the web UI and Moonlight client pairing. For best compatibility, this should have an RSA-2048 public key."
+    },
+    {
+     "key": "file_state",
+     "label": "State File",
+     "kind": "text",
+     "default": "",
+     "desc": "The file where current state of Sunshine is stored"
+    }
+   ]
+  },
+  {
+   "id": "advanced",
+   "name": "Advanced",
+   "fields": [
+    {
+     "key": "fec_percentage",
+     "label": "FEC Percentage",
+     "kind": "number",
+     "default": 20,
+     "desc": "Percentage of error correcting packets per data packet in each video frame. Set to 0 to disable forward error correction. Higher values can correct for more network packet loss, but at the cost of increasing bandwidth usage."
+    },
+    {
+     "key": "qp",
+     "label": "Quantization Parameter",
+     "kind": "number",
+     "default": 28,
+     "desc": "Some devices may not support Constant Bit Rate. For those devices, QP is used instead. Higher value means more compression, but less quality."
+    },
+    {
+     "key": "min_threads",
+     "label": "Minimum CPU Thread Count",
+     "kind": "number",
+     "default": 2,
+     "desc": "Increasing the value slightly reduces encoding efficiency, but the tradeoff is usually worth it to gain the use of more CPU cores for encoding. The ideal value is the lowest value that can reliably encode at your desired streaming settings on your hardware."
+    },
+    {
+     "key": "hevc_mode",
+     "label": "HEVC Support",
+     "kind": "enum",
+     "default": 0,
+     "desc": "Allows the client to request HEVC Main or HEVC Main10 video streams. HEVC is more CPU-intensive to encode, so enabling this may reduce performance when using software encoding.",
+     "options": [
+      {
+       "value": "0",
+       "label": "Sunshine will advertise support for HEVC based on encoder capabilities (recommended)"
+      },
+      {
+       "value": "1",
+       "label": "Sunshine will not advertise support for HEVC"
+      },
+      {
+       "value": "2",
+       "label": "Sunshine will advertise support for HEVC Main profile"
+      },
+      {
+       "value": "3",
+       "label": "Sunshine will advertise support for HEVC Main and Main10 (HDR) profiles"
+      }
+     ]
+    },
+    {
+     "key": "av1_mode",
+     "label": "AV1 Support",
+     "kind": "enum",
+     "default": 0,
+     "desc": "Allows the client to request AV1 Main 8-bit or 10-bit video streams. AV1 is more CPU-intensive to encode, so enabling this may reduce performance when using software encoding.",
+     "options": [
+      {
+       "value": "0",
+       "label": "Sunshine will advertise support for AV1 based on encoder capabilities (recommended)"
+      },
+      {
+       "value": "1",
+       "label": "Sunshine will not advertise support for AV1"
+      },
+      {
+       "value": "2",
+       "label": "Sunshine will advertise support for AV1 Main 8-bit profile"
+      },
+      {
+       "value": "3",
+       "label": "Sunshine will advertise support for AV1 Main 8-bit and 10-bit (HDR) profiles"
+      }
+     ]
+    },
+    {
+     "key": "capture",
+     "label": "Force a Specific Capture Method",
+     "kind": "enum",
+     "default": "",
+     "desc": "On automatic mode Sunshine will use the first one that works. NvFBC requires patched nvidia drivers.",
+     "options": [
+      {
+       "value": "wgc",
+       "label": "Windows.Graphics.Capture (beta)"
+      }
+     ]
+    },
+    {
+     "key": "fp16_sdr_gamma_encoded",
+     "label": "Treat FP16 SDR captures as gamma-encoded",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "Enable this if the stream looks washed out or its highlights are blown out while the display is in SDR mode and the desktop is captured in FP16 format (the log shows DXGI_FORMAT_R16G16B16A16_FLOAT as the desktop format). Sunshine will then skip the sRGB curve for FP16 SDR captures. Leave this disabled otherwise, because it darkens the stream when the FP16 capture is linear. It has no effect when the display is in HDR mode."
+    },
+    {
+     "key": "encoder",
+     "label": "Force a Specific Encoder",
+     "kind": "enum",
+     "default": "",
+     "desc": "Force a specific encoder, otherwise Sunshine will select the best available option. Note: If you specify a hardware encoder on Windows, it must match the GPU where the display is connected.",
+     "options": [
+      {
+       "value": "software",
+       "label": "Software"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "nv",
+   "name": "NVIDIA NVENC Encoder",
+   "fields": [
+    {
+     "key": "nvenc_preset",
+     "label": "Performance preset",
+     "kind": "enum",
+     "default": 1,
+     "desc": "Higher numbers improve compression (quality at given bitrate) at the cost of increased encoding latency. Recommended to change only when limited by network or decoder, otherwise similar effect can be accomplished by increasing bitrate.",
+     "options": [
+      {
+       "value": "1",
+       "label": "P1 (fastest, default)"
+      },
+      {
+       "value": "2",
+       "label": "P2"
+      },
+      {
+       "value": "3",
+       "label": "P3"
+      },
+      {
+       "value": "4",
+       "label": "P4"
+      },
+      {
+       "value": "5",
+       "label": "P5"
+      },
+      {
+       "value": "6",
+       "label": "P6"
+      },
+      {
+       "value": "7",
+       "label": "P7 (slowest)"
+      }
+     ]
+    },
+    {
+     "key": "nvenc_twopass",
+     "label": "Two-pass mode",
+     "kind": "enum",
+     "default": "quarter_res",
+     "desc": "Adds preliminary encoding pass. This allows to detect more motion vectors, better distribute bitrate across the frame and more strictly adhere to bitrate limits. Disabling it is not recommended since this can lead to occasional bitrate overshoot and subsequent packet loss.",
+     "options": [
+      {
+       "value": "disabled",
+       "label": "Disabled (fastest, not recommended)"
+      },
+      {
+       "value": "quarter_res",
+       "label": "Quarter resolution (faster, default)"
+      },
+      {
+       "value": "full_res",
+       "label": "Full resolution (slower)"
+      }
+     ]
+    },
+    {
+     "key": "nvenc_spatial_aq",
+     "label": "Spatial AQ",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "Assign higher QP values to flat regions of the video. Recommended to enable when streaming at lower bitrates."
+    },
+    {
+     "key": "nvenc_vbv_increase",
+     "label": "Single-frame VBV/HRD percentage increase",
+     "kind": "number",
+     "default": 0,
+     "desc": "By default sunshine uses single-frame VBV/HRD, which means any encoded video frame size is not expected to exceed requested bitrate divided by requested frame rate. Relaxing this restriction can be beneficial and act as low-latency variable bitrate, but may also lead to packet loss if the network doesn't have buffer headroom to handle bitrate spikes. Maximum accepted value is 400, which corresponds to 5x increased encoded video frame upper size limit."
+    },
+    {
+     "key": "nvenc_realtime_hags",
+     "label": "Use realtime priority in hardware accelerated gpu scheduling",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "Currently NVIDIA drivers may freeze in encoder when HAGS is enabled, realtime priority is used and VRAM utilization is close to maximum. Disabling this option lowers the priority to high, sidestepping the freeze at the cost of reduced capture performance when the GPU is heavily loaded."
+    },
+    {
+     "key": "nvenc_split_encode",
+     "label": "Split frame encoding",
+     "kind": "enum",
+     "default": "driver_decides",
+     "desc": "Split the encoding of each video frame over multiple NVENC hardware units. Significantly reduces host processing latency with a marginal compression efficiency penalty. The default option enables SFE if the following conditions are met: there are 2+ NVENC units, the stream is 4K resolution or higher, and the preset is P1-P4. Set this to Enabled to use SFE at lower resolutions or higher presets.",
+     "options": [
+      {
+       "value": "disabled",
+       "label": "Disabled"
+      },
+      {
+       "value": "driver_decides",
+       "label": "Driver decides (default)"
+      },
+      {
+       "value": "enabled",
+       "label": "Enabled"
+      }
+     ],
+     "platforms": [
+      "windows"
+     ]
+    },
+    {
+     "key": "nvenc_latency_over_power",
+     "label": "Prefer lower encoding latency over power savings",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "Sunshine requests maximum GPU clock speed while streaming to reduce encoding latency. Disabling it is not recommended since this can lead to significantly increased encoding latency."
+    },
+    {
+     "key": "nvenc_opengl_vulkan_on_dxgi",
+     "label": "Present OpenGL/Vulkan on top of DXGI",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "Sunshine can't capture fullscreen OpenGL and Vulkan programs at full frame rate unless they present on top of DXGI. This is system-wide setting that is reverted on sunshine program exit."
+    },
+    {
+     "key": "nvenc_h264_cavlc",
+     "label": "Prefer CAVLC over CABAC in H.264",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "Simpler form of entropy coding. CAVLC needs around 10% more bitrate for same quality. Only relevant for really old decoding devices."
+    }
+   ],
+   "platforms": [
+    "windows",
+    "linux",
+    "freebsd"
+   ]
+  },
+  {
+   "id": "qsv",
+   "name": "Intel QuickSync Encoder",
+   "fields": [
+    {
+     "key": "qsv_preset",
+     "label": "QuickSync Preset",
+     "kind": "enum",
+     "default": "medium",
+     "options": [
+      {
+       "value": "veryfast",
+       "label": "fastest (lowest quality)"
+      },
+      {
+       "value": "faster",
+       "label": "faster (lower quality)"
+      },
+      {
+       "value": "fast",
+       "label": "fast (low quality)"
+      },
+      {
+       "value": "medium",
+       "label": "medium (default)"
+      },
+      {
+       "value": "slow",
+       "label": "slow (good quality)"
+      },
+      {
+       "value": "slower",
+       "label": "slower (better quality)"
+      },
+      {
+       "value": "slowest",
+       "label": "slowest (best quality)"
+      }
+     ]
+    },
+    {
+     "key": "qsv_coder",
+     "label": "QuickSync Coder (H264)",
+     "kind": "enum",
+     "default": "auto",
+     "options": [
+      {
+       "value": "auto",
+       "label": "auto -- let ffmpeg decide (default)"
+      },
+      {
+       "value": "cabac",
+       "label": "cabac -- context adaptive binary arithmetic coding - higher quality"
+      },
+      {
+       "value": "cavlc",
+       "label": "cavlc -- context adaptive variable-length coding - faster decode"
+      }
+     ]
+    },
+    {
+     "key": "qsv_slow_hevc",
+     "label": "Allow Slow HEVC Encoding",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "This can enable HEVC encoding on older Intel GPUs, at the cost of higher GPU usage and worse performance."
+    }
+   ],
+   "platforms": [
+    "windows"
+   ]
+  },
+  {
+   "id": "amd",
+   "name": "AMD AMF Encoder",
+   "fields": [
+    {
+     "key": "amd_usage",
+     "label": "AMF Usage",
+     "kind": "enum",
+     "default": "ultralowlatency",
+     "desc": "This sets the base encoding profile. All options presented below will override a subset of the usage profile, but there are additional hidden settings applied that cannot be configured elsewhere.",
+     "options": [
+      {
+       "value": "transcoding",
+       "label": "transcoding -- transcoding (slowest)"
+      },
+      {
+       "value": "webcam",
+       "label": "webcam -- webcam (slow)"
+      },
+      {
+       "value": "lowlatency_high_quality",
+       "label": "lowlatency_high_quality - low latency, high quality (fast)"
+      },
+      {
+       "value": "lowlatency",
+       "label": "lowlatency - low latency (fastest)"
+      },
+      {
+       "value": "ultralowlatency",
+       "label": "ultralowlatency - ultra low latency (fastest; default)"
+      }
+     ]
+    },
+    {
+     "key": "amd_rc",
+     "label": "AMF Rate Control",
+     "kind": "enum",
+     "default": "vbr_latency",
+     "desc": "This controls the rate control method to ensure we are not exceeding the client bitrate target. 'cqp' is not suitable for bitrate targeting, and other options besides 'vbr_latency' depend on HRD Enforcement to help constrain bitrate overflows.",
+     "options": [
+      {
+       "value": "cbr",
+       "label": "cbr -- constant bitrate (recommended if HRD is enabled)"
+      },
+      {
+       "value": "cqp",
+       "label": "cqp -- constant qp mode"
+      },
+      {
+       "value": "vbr_latency",
+       "label": "vbr_latency -- latency constrained variable bitrate (recommended if HRD is disabled; default)"
+      },
+      {
+       "value": "vbr_peak",
+       "label": "vbr_peak -- peak constrained variable bitrate"
+      }
+     ]
+    },
+    {
+     "key": "amd_enforce_hrd",
+     "label": "AMF Hypothetical Reference Decoder (HRD) Enforcement",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "Increases the constraints on rate control to meet HRD model requirements. This greatly reduces bitrate overflows, but may cause encoding artifacts or reduced quality on certain cards."
+    },
+    {
+     "key": "amd_max_au_size",
+     "label": "AMF Max AU Size (bits)",
+     "kind": "text",
+     "default": "",
+     "desc": "Maximum encoded H.264 or HEVC Access Unit size in bits. Empty or -1 leaves the AMF default. Use only to cap oversized frames that exceed Sunshine's FEC capacity. The limit depends on packet size and FEC percentage, not bitrate or frame rate. See the documentation for sizing."
+    },
+    {
+     "key": "amd_quality",
+     "label": "AMF Quality",
+     "kind": "enum",
+     "default": "balanced",
+     "desc": "This controls the balance between encoding speed and quality.",
+     "options": [
+      {
+       "value": "speed",
+       "label": "speed -- prefer speed"
+      },
+      {
+       "value": "balanced",
+       "label": "balanced -- balanced (default)"
+      },
+      {
+       "value": "quality",
+       "label": "quality -- prefer quality"
+      }
+     ]
+    },
+    {
+     "key": "amd_preanalysis",
+     "label": "AMF Preanalysis",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "This enables rate-control preanalysis, which may increase quality at the expense of increased encoding latency."
+    },
+    {
+     "key": "amd_vbaq",
+     "label": "AMF Variance Based Adaptive Quantization (VBAQ)",
+     "kind": "toggle",
+     "default": "enabled",
+     "desc": "The human visual system is typically less sensitive to artifacts in highly textured areas. In VBAQ mode, pixel variance is used to indicate the complexity of spatial textures, allowing the encoder to allocate more bits to smoother areas. Enabling this feature leads to improvements in subjective visual quality with some content."
+    },
+    {
+     "key": "amd_coder",
+     "label": "AMF Coder (H264)",
+     "kind": "enum",
+     "default": "auto",
+     "desc": "Allows you to select the entropy encoding to prioritize quality or encoding speed. H.264 only.",
+     "options": [
+      {
+       "value": "auto",
+       "label": "auto -- let ffmpeg decide (default)"
+      },
+      {
+       "value": "cabac",
+       "label": "cabac -- context adaptive binary arithmetic coding - higher quality"
+      },
+      {
+       "value": "cavlc",
+       "label": "cavlc -- context adaptive variable-length coding - faster decode"
+      }
+     ]
+    }
+   ],
+   "platforms": [
+    "windows"
+   ]
+  },
+  {
+   "id": "vt",
+   "name": "VideoToolbox Encoder",
+   "fields": [
+    {
+     "key": "vt_coder",
+     "label": "VideoToolbox Coder",
+     "kind": "enum",
+     "default": "auto",
+     "options": [
+      {
+       "value": "auto",
+       "label": "auto -- let ffmpeg decide (default)"
+      },
+      {
+       "value": "cabac",
+       "label": "cabac -- context adaptive binary arithmetic coding - higher quality"
+      },
+      {
+       "value": "cavlc",
+       "label": "cavlc -- context adaptive variable-length coding - faster decode"
+      }
+     ]
+    },
+    {
+     "key": "vt_software",
+     "label": "VideoToolbox Software Encoding",
+     "kind": "enum",
+     "default": "auto",
+     "options": [
+      {
+       "value": "auto",
+       "label": "Automatic"
+      },
+      {
+       "value": "disabled",
+       "label": "Disabled"
+      },
+      {
+       "value": "allowed",
+       "label": "Allowed"
+      },
+      {
+       "value": "forced",
+       "label": "Forced"
+      }
+     ]
+    },
+    {
+     "key": "vt_realtime",
+     "label": "VideoToolbox Realtime Encoding",
+     "kind": "toggle",
+     "default": "enabled"
+    }
+   ],
+   "platforms": [
+    "macos"
+   ]
+  },
+  {
+   "id": "vaapi",
+   "name": "VA-API Encoder",
+   "fields": [
+    {
+     "key": "vaapi_blbrc",
+     "label": "Block level based bitrate control (BLBRC)",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "Enable block level rate control, which assigns different bitrate block by block. Can be combined with CBR/VBR-type rate control methods on supported encoders."
+    },
+    {
+     "key": "vaapi_quality",
+     "label": "VA-API Quality",
+     "kind": "enum",
+     "default": "auto",
+     "desc": "Determines encoder tradeoff between quality and speed/power consumption.",
+     "options": [
+      {
+       "value": "auto",
+       "label": "auto"
+      },
+      {
+       "value": "speed",
+       "label": "speed -- prefer speed"
+      },
+      {
+       "value": "balanced",
+       "label": "balanced -- balanced"
+      },
+      {
+       "value": "quality",
+       "label": "quality -- prefer quality"
+      }
+     ]
+    },
+    {
+     "key": "vaapi_rc",
+     "label": "VA-API Rate Control",
+     "kind": "enum",
+     "default": "auto",
+     "desc": "This controls the rate control method to ensure we are not exceeding the client bitrate target. Note that supported rate control methods varies by vendor, and automatic may force-enable strict bitrate enforcement on certain devices.",
+     "options": [
+      {
+       "value": "auto",
+       "label": "auto"
+      },
+      {
+       "value": "avbr",
+       "label": "avbr -- average variable bitrate"
+      },
+      {
+       "value": "vbr",
+       "label": "vbr -- variable bitrate"
+      },
+      {
+       "value": "cbr",
+       "label": "cbr -- constant bitrate"
+      },
+      {
+       "value": "cqp",
+       "label": "cqp -- constant qp mode"
+      },
+      {
+       "value": "icq",
+       "label": "icq -- intelligent constant qp mode"
+      },
+      {
+       "value": "qvbr",
+       "label": "qvbr -- quality-defined variable bitrate"
+      }
+     ]
+    },
+    {
+     "key": "vaapi_strict_rc_buffer",
+     "label": "Strictly enforce frame bitrate limits for H.264/HEVC on AMD GPUs",
+     "kind": "toggle",
+     "default": "disabled",
+     "desc": "Enabling this option can avoid dropped frames over the network during scene changes, but video quality may be reduced during motion."
+    }
+   ],
+   "platforms": [
+    "linux",
+    "freebsd"
+   ]
+  },
+  {
+   "id": "vulkan",
+   "name": "Vulkan Encoder",
+   "fields": [
+    {
+     "key": "vk_tune",
+     "label": "Tuning",
+     "kind": "enum",
+     "default": 2,
+     "desc": "Low latency modes reduce encoding delay at the cost of quality.",
+     "options": [
+      {
+       "value": "0",
+       "label": "Automatic"
+      },
+      {
+       "value": "1",
+       "label": "High Quality (hq)"
+      },
+      {
+       "value": "2",
+       "label": "Low Latency (ll) (default)"
+      },
+      {
+       "value": "3",
+       "label": "Ultra Low Latency (ull)"
+      }
+     ]
+    },
+    {
+     "key": "vk_rc_mode",
+     "label": "Rate Control",
+     "kind": "enum",
+     "default": 2,
+     "desc": "Rate control mode for encoding. Auto lets the driver decide.",
+     "options": [
+      {
+       "value": "0",
+       "label": "Automatic"
+      },
+      {
+       "value": "1",
+       "label": "CQP (Constant QP)"
+      },
+      {
+       "value": "2",
+       "label": "CBR (Constant Bitrate) (default)"
+      },
+      {
+       "value": "4",
+       "label": "VBR (Variable Bitrate)"
+      }
+     ]
+    },
+    {
+     "key": "vk_quality",
+     "label": "Quality",
+     "kind": "enum",
+     "default": "balanced",
+     "desc": "Determines encoder tradeoff between quality and speed.",
+     "options": [
+      {
+       "value": "speed",
+       "label": "speed -- prefer speed"
+      },
+      {
+       "value": "balanced",
+       "label": "balanced -- balanced (default)"
+      },
+      {
+       "value": "quality",
+       "label": "quality -- prefer quality"
+      }
+     ]
+    }
+   ],
+   "platforms": [
+    "linux",
+    "freebsd"
+   ]
+  },
+  {
+   "id": "sw",
+   "name": "Software Encoder",
+   "fields": [
+    {
+     "key": "sw_preset",
+     "label": "SW Presets",
+     "kind": "enum",
+     "default": "superfast",
+     "desc": "Optimize the trade-off between encoding speed (encoded frames per second) and compression efficiency (quality per bit in the bitstream). Defaults to superfast.",
+     "options": [
+      {
+       "value": "ultrafast",
+       "label": "ultrafast"
+      },
+      {
+       "value": "superfast",
+       "label": "superfast (default)"
+      },
+      {
+       "value": "veryfast",
+       "label": "veryfast"
+      },
+      {
+       "value": "faster",
+       "label": "faster"
+      },
+      {
+       "value": "fast",
+       "label": "fast"
+      },
+      {
+       "value": "medium",
+       "label": "medium"
+      },
+      {
+       "value": "slow",
+       "label": "slow"
+      },
+      {
+       "value": "slower",
+       "label": "slower"
+      },
+      {
+       "value": "veryslow",
+       "label": "veryslow"
+      }
+     ]
+    },
+    {
+     "key": "sw_tune",
+     "label": "SW Tune",
+     "kind": "enum",
+     "default": "zerolatency",
+     "desc": "Tuning options, which are applied after the preset. Defaults to zerolatency.",
+     "options": [
+      {
+       "value": "film",
+       "label": "film -- use for high quality movie content; lowers deblocking"
+      },
+      {
+       "value": "animation",
+       "label": "animation -- good for cartoons; uses higher deblocking and more reference frames"
+      },
+      {
+       "value": "grain",
+       "label": "grain -- preserves the grain structure in old, grainy film material"
+      },
+      {
+       "value": "stillimage",
+       "label": "stillimage -- good for slideshow-like content"
+      },
+      {
+       "value": "fastdecode",
+       "label": "fastdecode -- allows faster decoding by disabling certain filters"
+      },
+      {
+       "value": "zerolatency",
+       "label": "zerolatency -- good for fast encoding and low-latency streaming (default)"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

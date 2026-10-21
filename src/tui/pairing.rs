@@ -13,7 +13,7 @@ use sun_control::api::types::{Client, PendingPairing};
 use sun_control::devices::format_date;
 
 use super::app::{Action, App, Confirm, FormKind, Load, Modal, Msg};
-use super::ui::{ACCENT, BAD, OK, card, hints, muted, not_connected};
+use super::ui::{ACCENT, BAD, OK, card, hints, muted, not_connected, pane};
 use super::widgets::{Field, Form, Input};
 
 pub const PAIRING_REFRESH: Duration = Duration::from_secs(3);
@@ -29,8 +29,9 @@ pub enum Pending {
 pub struct PairingState {
     pub pending: Pending,
     pub clients: Load<Vec<Client>>,
-    /// Selection across both lists: pending requests first, then clients.
-    pub selected: usize,
+    /// Cursor in "Waiting to pair" (pane 1) and "Paired devices" (pane 2).
+    pub pending_sel: usize,
+    pub client_sel: usize,
     pub at: Option<Instant>,
     pub in_flight: bool,
 }
@@ -40,7 +41,8 @@ impl Default for PairingState {
         Self {
             pending: Pending::Loading,
             clients: Load::Loading,
-            selected: 0,
+            pending_sel: 0,
+            client_sel: 0,
             at: None,
             in_flight: false,
         }
@@ -67,18 +69,31 @@ impl PairingState {
         }
     }
 
-    fn len(&self) -> usize {
-        self.pending().len() + self.clients().len()
+    /// Move the focused pane's cursor down or up.
+    fn step(&mut self, focus: usize, down: bool) {
+        let len = if focus == 1 {
+            self.pending().len()
+        } else {
+            self.clients().len()
+        };
+        let sel = if focus == 1 {
+            &mut self.pending_sel
+        } else {
+            &mut self.client_sel
+        };
+        *sel = if down {
+            (*sel + 1).min(len.saturating_sub(1))
+        } else {
+            sel.saturating_sub(1)
+        };
     }
 
-    fn selection(&self) -> Option<Selected<'_>> {
-        let p = self.pending();
-        if self.selected < p.len() {
-            Some(Selected::Pending(&p[self.selected]))
-        } else {
-            self.clients()
-                .get(self.selected - p.len())
-                .map(Selected::Client)
+    /// The item under the cursor of the focused pane.
+    fn selection(&self, focus: usize) -> Option<Selected<'_>> {
+        match focus {
+            1 => self.pending().get(self.pending_sel).map(Selected::Pending),
+            2 => self.clients().get(self.client_sel).map(Selected::Client),
+            _ => None,
         }
     }
 
@@ -101,7 +116,8 @@ impl PairingState {
             }
             Err(e) => Load::Failed(e.to_string()),
         };
-        self.selected = self.selected.min(self.len().saturating_sub(1));
+        self.pending_sel = self.pending_sel.min(self.pending().len().saturating_sub(1));
+        self.client_sel = self.client_sel.min(self.clients().len().saturating_sub(1));
     }
 }
 
@@ -166,15 +182,11 @@ impl App {
         if self.client().is_none() {
             return;
         }
-        let n = self.pairing.len();
-        let sel = self.pairing.selected;
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.pairing.selected = (sel + 1).min(n.saturating_sub(1))
-            }
-            KeyCode::Up | KeyCode::Char('k') => self.pairing.selected = sel.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => self.pairing.step(self.focus, true),
+            KeyCode::Up | KeyCode::Char('k') => self.pairing.step(self.focus, false),
             KeyCode::Char('p') => {
-                let request = match (&self.pairing.pending, self.pairing.selection()) {
+                let request = match (&self.pairing.pending, self.pairing.selection(self.focus)) {
                     (_, Some(Selected::Pending(p))) => Some(p.clone()),
                     (Pending::Ready(list), _) if list.len() == 1 => Some(list[0].clone()),
                     (Pending::Ready(list), _) if list.is_empty() => {
@@ -195,7 +207,7 @@ impl App {
                 };
                 self.open_pair_form(request.as_ref());
             }
-            KeyCode::Enter => match self.pairing.selection() {
+            KeyCode::Enter => match self.pairing.selection(self.focus) {
                 Some(Selected::Pending(p)) => {
                     let p = p.clone();
                     self.open_pair_form(Some(&p));
@@ -207,12 +219,12 @@ impl App {
                 None => {}
             },
             KeyCode::Char(' ') | KeyCode::Char('e') => {
-                if let Some(Selected::Client(c)) = self.pairing.selection() {
+                if let Some(Selected::Client(c)) = self.pairing.selection(self.focus) {
                     self.toggle_client(c.clone());
                 }
             }
             KeyCode::Char('c') | KeyCode::Char('d') | KeyCode::Delete => {
-                let action = match self.pairing.selection() {
+                let action = match self.pairing.selection(self.focus) {
                     Some(Selected::Pending(p)) => Confirm {
                         title: "Cancel pairing request?".into(),
                         body: format!("{} will have to start pairing again.", p.label()),
@@ -273,6 +285,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         return not_connected(f, app, area);
     }
     let area = area.inner(Margin::new(1, 0));
+    let focus = app.focus;
     let state = &app.pairing;
     let pending_rows = state.pending().len().max(1) as u16;
     let [pending_area, clients_area] = Layout::vertical([
@@ -283,7 +296,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let highlight = Style::new().bg(Color::Indexed(236)).fg(ACCENT);
 
     // Waiting devices.
-    let block = card("Waiting to pair");
+    let block = pane("Waiting to pair", focus == 1);
     match &state.pending {
         Pending::Ready(list) if !list.is_empty() => {
             let rows: Vec<Row> = list
@@ -299,7 +312,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                         .bold(),
                         Cell::from(Span::styled(p.address.clone(), muted())),
                     ]);
-                    if i == state.selected {
+                    if focus == 1 && i == state.pending_sel {
                         r.style(highlight)
                     } else {
                         r
@@ -346,7 +359,6 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Paired clients.
-    let offset = state.pending().len();
     match &state.clients {
         Load::Ready(clients) => {
             let has_toggle = clients.iter().any(|c| c.enabled().is_some());
@@ -371,7 +383,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                         Cell::from(created),
                         Cell::from(Span::styled(c.uuid.clone(), muted())),
                     ]);
-                    if i + offset == state.selected {
+                    if focus == 2 && i == state.client_sel {
                         r.style(highlight)
                     } else {
                         r
@@ -394,7 +406,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                 ],
             )
             .header(header)
-            .block(card(&title).title_bottom(hints(&keys).right_aligned()));
+            .block(pane(&title, focus == 2).title_bottom(hints(&keys).right_aligned()));
             f.render_widget(table, clients_area);
             if clients.is_empty() {
                 f.render_widget(

@@ -11,7 +11,10 @@ use super::logs::{Level, LogStatus};
 use super::widgets::{Form, centered};
 
 pub(super) const ACCENT: Color = Color::Yellow;
-pub(super) const MUTED: Color = Color::DarkGray;
+/// Secondary text: readable but quieter than normal text.
+pub(super) const MUTED: Color = Color::Gray;
+/// Borders and separators only; too dark for text on many terminals.
+pub(super) const BORDER: Color = Color::DarkGray;
 pub(super) const OK: Color = Color::Green;
 pub(super) const BAD: Color = Color::Red;
 
@@ -35,10 +38,26 @@ pub(super) fn hints<'a>(pairs: &[(&'a str, &'a str)]) -> Line<'a> {
     Line::from(spans)
 }
 
+pub(super) fn border() -> Style {
+    Style::new().fg(BORDER)
+}
+
+/// A card that can hold keyboard focus, shown with an accent border.
+pub(super) fn pane(title: &str, focused: bool) -> Block<'_> {
+    let block = card(title);
+    if focused {
+        block
+            .border_style(Style::new().fg(ACCENT))
+            .title_style(Style::new().fg(ACCENT))
+    } else {
+        block
+    }
+}
+
 pub(super) fn card(title: &str) -> Block<'_> {
     Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(muted())
+        .border_style(border())
         .title(Span::styled(format!(" {title} "), Style::new().bold()))
         .padding(Padding::horizontal(1))
 }
@@ -58,6 +77,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Screen::Dashboard => draw_dashboard(f, app, main),
         Screen::Apps => super::apps::draw(f, app, main),
         Screen::Pairing => super::pairing::draw(f, app, main),
+        Screen::Config => super::config::draw(f, app, main),
         Screen::Logs => draw_logs(f, app, main),
         Screen::Hosts => draw_hosts(f, app, main),
     }
@@ -65,11 +85,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     match &mut app.modal {
         Some(Modal::Editor(editor)) => editor.draw(f),
+        Some(Modal::Picker(picker)) => super::config::draw_picker(f, picker),
         Some(Modal::Help) => draw_help(f),
         Some(Modal::Confirm(c)) => {
             let body = Text::from(c.body.as_str());
             let width = 64;
-            let height = body.height() as u16 + 6;
+            // Count wrapped lines: inner width is the modal minus borders and padding.
+            let wrapped: usize = body
+                .lines
+                .iter()
+                .map(|l| l.width().max(1).div_ceil(width as usize - 6))
+                .sum();
+            let height = wrapped as u16 + 5;
             let area = centered(f.area(), width, height);
             f.render_widget(Clear, area);
             let block = modal_block(&c.title);
@@ -148,10 +175,11 @@ fn draw_nav(f: &mut Frame, app: &App, area: Rect) {
     for (i, s) in Screen::ALL.iter().enumerate() {
         let active = *s == app.screen;
         let marker = if active { "▌" } else { " " };
-        let style = if active {
-            Style::new().fg(ACCENT).bold()
-        } else {
-            Style::new()
+        let style = match (active, app.focus == 0) {
+            // The sidebar has focus: make the cursor unmistakable.
+            (true, true) => Style::new().fg(Color::Black).bg(ACCENT).bold(),
+            (true, false) => Style::new().fg(ACCENT).bold(),
+            _ => Style::new(),
         };
         lines.push(Line::from(vec![
             Span::styled(marker, Style::new().fg(ACCENT)),
@@ -161,7 +189,11 @@ fn draw_nav(f: &mut Frame, app: &App, area: Rect) {
     }
     let block = Block::new()
         .borders(ratatui::widgets::Borders::RIGHT)
-        .border_style(muted());
+        .border_style(if app.focus == 0 {
+            Style::new().fg(ACCENT)
+        } else {
+            border()
+        });
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -179,13 +211,13 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("r", "restart"),
             ("x", "close app"),
             ("R", "refresh"),
-            ("Tab", "next"),
+            ("Tab", "focus"),
             ("?", "help"),
             ("q", "quit"),
         ]),
         Screen::Dashboard => hints(&[
             ("Enter", "retry"),
-            ("5", "hosts"),
+            ("6", "hosts"),
             ("?", "help"),
             ("q", "quit"),
         ]),
@@ -204,6 +236,16 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("Enter", "pair/toggle"),
             ("d", "unpair/cancel"),
             ("?", "help"),
+            ("q", "quit"),
+        ]),
+        Screen::Config => hints(&[
+            ("↑↓", "select"),
+            ("Tab", "focus"),
+            ("Enter", "change"),
+            ("x", "default"),
+            ("u", "undo"),
+            ("/", "search"),
+            ("s", "save"),
             ("q", "quit"),
         ]),
         Screen::Logs => hints(&[
@@ -238,12 +280,12 @@ pub(super) fn not_connected(f: &mut Frame, app: &App, area: Rect) {
             Line::raw(""),
             Line::styled(error.clone(), muted()),
             Line::raw(""),
-            hints(&[("Enter", "retry"), ("5", "choose another host")]),
+            hints(&[("Enter", "retry"), ("6", "choose another host")]),
         ],
         _ => vec![
             Line::from("No host selected."),
             Line::raw(""),
-            hints(&[("5", "choose a host")]),
+            hints(&[("6", "choose a host")]),
         ],
     };
     let area = centered(
@@ -355,9 +397,12 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![key(" x "), Span::raw(" Close the running app")]),
         Line::from(vec![key(" R "), Span::raw(" Refresh")]),
         Line::raw(""),
-        Line::styled("Configuration editing is coming next.", muted()),
+        Line::styled("Press 4 to change Sunshine's configuration.", muted()),
     ];
-    f.render_widget(Paragraph::new(action_lines).block(card("Actions")), actions);
+    f.render_widget(
+        Paragraph::new(action_lines).block(pane("Actions", app.focus == 1)),
+        actions,
+    );
 }
 
 fn level_style(level: Level) -> Style {
@@ -398,6 +443,7 @@ fn draw_logs(f: &mut Frame, app: &mut App, area: Rect) {
     if app.client().is_none() {
         return not_connected(f, app, area);
     }
+    let focused = app.focus == 1;
     let logs = &mut app.logs;
     let mode = if logs.follow {
         Span::styled("● following", Style::new().fg(OK))
@@ -415,7 +461,11 @@ fn draw_logs(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(muted())
+        .border_style(if focused {
+            Style::new().fg(ACCENT)
+        } else {
+            border()
+        })
         .title(Line::from(title));
     let inner = block.inner(area);
     logs.view_height = inner.height as usize;
@@ -515,7 +565,7 @@ fn draw_hosts(f: &mut Frame, app: &mut App, area: Rect) {
         ],
     )
     .header(header)
-    .block(card("Hosts"))
+    .block(pane("Hosts", app.focus == 1))
     .row_highlight_style(Style::new().bg(Color::Indexed(236)).fg(ACCENT))
     .highlight_symbol("› ");
     f.render_stateful_widget(table, table_area, &mut app.hosts);
@@ -621,7 +671,11 @@ fn draw_help(f: &mut Frame) {
     };
     let lines = vec![
         section("Global"),
-        item("1-5 / Tab", "switch screen"),
+        item("Tab / S-Tab", "move focus between panes"),
+        item("↑↓", "move within the focused pane"),
+        item("Enter / →", "open the screen chosen in the sidebar"),
+        item("←", "back towards the sidebar"),
+        item("1-6", "jump straight to a screen"),
         item("R", "refresh"),
         item("?", "this help"),
         item("q / Ctrl-C", "quit"),
@@ -639,6 +693,13 @@ fn draw_help(f: &mut Frame) {
         item("p", "pair a waiting device with its PIN"),
         item("Enter / Space", "pair, or enable/disable a device"),
         item("d / D", "unpair (or cancel request) / unpair all"),
+        Line::raw(""),
+        section("Config"),
+        item("[ / ]", "previous / next section"),
+        item("Enter", "change (toggle, choose or type)"),
+        item("x / u / U", "reset to default / undo / undo all"),
+        item("/ Esc", "search all settings / clear"),
+        item("s", "review and save"),
         Line::raw(""),
         section("Logs"),
         item("j/k ↑↓ PgUp/Dn", "scroll"),

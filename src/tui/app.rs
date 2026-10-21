@@ -12,10 +12,13 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::app_editor::{AppEditor, EditorEvent};
 use super::apps::AppsState;
+use super::config::{ConfigState, Picker};
 use super::logs::LogsState;
 use super::pairing::{PAIRING_REFRESH, PairingState};
 use super::widgets::{Field, Form, FormEvent, Input};
+use sun_control::api::types::Config;
 use sun_control::api::types::{App as SunApp, Client, PendingPairing};
+use sun_control::schema::Schema;
 
 const DASHBOARD_REFRESH: Duration = Duration::from_secs(15);
 const LOGS_REFRESH: Duration = Duration::from_secs(3);
@@ -26,15 +29,25 @@ pub enum Screen {
     Dashboard,
     Apps,
     Pairing,
+    Config,
     Logs,
     Hosts,
 }
 
 impl Screen {
-    pub const ALL: [Screen; 5] = [
+    /// Focusable panes on this screen, besides the sidebar.
+    pub fn panes(self) -> usize {
+        match self {
+            Screen::Pairing | Screen::Config => 2,
+            _ => 1,
+        }
+    }
+
+    pub const ALL: [Screen; 6] = [
         Screen::Dashboard,
         Screen::Apps,
         Screen::Pairing,
+        Screen::Config,
         Screen::Logs,
         Screen::Hosts,
     ];
@@ -44,6 +57,7 @@ impl Screen {
             Screen::Dashboard => "Dashboard",
             Screen::Apps => "Apps",
             Screen::Pairing => "Pairing",
+            Screen::Config => "Config",
             Screen::Logs => "Logs",
             Screen::Hosts => "Hosts",
         }
@@ -67,7 +81,9 @@ pub struct Info {
     pub fingerprint: Option<String>,
 }
 
+#[derive(Default)]
 pub enum Load<T> {
+    #[default]
     Idle,
     Loading,
     Ready(T),
@@ -84,6 +100,8 @@ pub enum Action {
     Unpair { uuid: String, name: String },
     UnpairAll,
     CancelPairing { id: String, label: String },
+    SaveConfig,
+    Quit,
 }
 
 pub struct Confirm {
@@ -98,12 +116,15 @@ pub enum FormKind {
     AddHost,
     LogSearch,
     Pair { pairing_id: Option<String> },
+    ConfigValue { key: String },
+    ConfigSearch,
 }
 
 pub enum Modal {
     Confirm(Confirm),
     Form(Form<FormKind>),
     Editor(Box<AppEditor>),
+    Picker(Picker),
     Help,
 }
 
@@ -131,6 +152,8 @@ pub enum Msg {
         pending: Result<Vec<PendingPairing>, ApiError>,
         clients: Result<Vec<Client>, ApiError>,
     },
+    Config(Result<Config, ApiError>),
+    ConfigSaved(Result<(), ApiError>),
     /// A finished action; an empty message refreshes without a toast.
     Done(Result<String, String>),
 }
@@ -140,12 +163,16 @@ pub struct App {
     pub insecure: bool,
     pub conn: ConnState,
     pub screen: Screen,
+    /// 0 is the sidebar; 1.. are the current screen's panes.
+    pub focus: usize,
     pub info: Load<Info>,
     pub info_at: Option<Instant>,
     pub logs: LogsState,
     pub logs_at: Option<Instant>,
     pub apps: AppsState,
     pub pairing: PairingState,
+    pub schema: Schema,
+    pub config: ConfigState,
     pub hosts: TableState,
     pub modal: Option<Modal>,
     pub toast: Option<Toast>,
@@ -163,12 +190,15 @@ impl App {
             insecure,
             conn: ConnState::Disconnected,
             screen: Screen::Dashboard,
+            focus: 0,
             info: Load::Idle,
             info_at: None,
             logs: LogsState::default(),
             logs_at: None,
             apps: AppsState::default(),
             pairing: PairingState::default(),
+            schema: Schema::load(),
+            config: ConfigState::default(),
             hosts,
             modal: None,
             toast: None,
@@ -215,6 +245,7 @@ impl App {
         self.logs_at = None;
         self.apps = AppsState::default();
         self.pairing = PairingState::default();
+        self.config = ConfigState::default();
         // Server details double as the credential check, whatever the screen.
         self.load_info();
         if self.screen != Screen::Dashboard {
@@ -258,6 +289,7 @@ impl App {
             Screen::Logs => self.load_logs(),
             Screen::Apps => self.load_apps(),
             Screen::Pairing => self.load_pairing(),
+            Screen::Config => self.load_config(),
             Screen::Dashboard | Screen::Hosts => self.load_info(),
         }
     }
@@ -346,6 +378,8 @@ impl App {
                 c.unpair_all().await?;
                 Ok("Unpaired all devices".into())
             }),
+            Action::SaveConfig => self.save_config(),
+            Action::Quit => self.quit = true,
             Action::CancelPairing { id, label } => self.run_api(move |c| async move {
                 c.cancel_pairing(&id).await?;
                 Ok(format!("Cancelled pairing request from {label}"))
@@ -431,6 +465,8 @@ impl App {
                 self.apps.table.select(Some(sel));
             }
             Msg::Pairing { pending, clients } => self.pairing.set(pending, clients),
+            Msg::Config(result) => self.on_config(result),
+            Msg::ConfigSaved(result) => self.on_config_saved(result),
             Msg::Done(Ok(text)) => {
                 if !text.is_empty() {
                     self.toast(text, ToastKind::Info);
@@ -531,15 +567,39 @@ impl App {
             return;
         }
         match key.code {
+            KeyCode::Char('q') if self.config.dirty() > 0 => {
+                self.modal = Some(Modal::Confirm(Confirm {
+                    title: "Quit without saving?".into(),
+                    body: format!(
+                        "{} configuration change(s) haven't been saved.",
+                        self.config.dirty()
+                    ),
+                    action: Action::Quit,
+                }))
+            }
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('?') => self.modal = Some(Modal::Help),
             KeyCode::Char(c @ '1'..='9') => {
                 if let Some(s) = Screen::ALL.get(c as usize - '1' as usize) {
                     self.switch(*s);
+                    self.focus = 1;
                 }
             }
-            KeyCode::Tab => self.cycle_screen(1),
-            KeyCode::BackTab => self.cycle_screen(Screen::ALL.len() - 1),
+            KeyCode::Tab => self.focus = (self.focus + 1) % (self.screen.panes() + 1),
+            KeyCode::BackTab => {
+                let n = self.screen.panes() + 1;
+                self.focus = (self.focus + n - 1) % n;
+            }
+            // Sidebar: arrows pick the screen, Enter/→ goes into it.
+            KeyCode::Up | KeyCode::Char('k') if self.focus == 0 => {
+                self.cycle_screen(Screen::ALL.len() - 1)
+            }
+            KeyCode::Down | KeyCode::Char('j') if self.focus == 0 => self.cycle_screen(1),
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if self.focus == 0 => {
+                self.focus = 1
+            }
+            // ← from a screen's first pane returns to the sidebar.
+            KeyCode::Left | KeyCode::Char('h') if self.focus == 1 => self.focus = 0,
             KeyCode::Char('R') => {
                 self.toast("Refreshing…", ToastKind::Info);
                 self.refresh();
@@ -548,6 +608,7 @@ impl App {
                 Screen::Dashboard => self.dashboard_key(key),
                 Screen::Apps => self.apps_key(key),
                 Screen::Pairing => self.pairing_key(key),
+                Screen::Config => self.config_key(key),
                 Screen::Logs => self.logs_key(key),
                 Screen::Hosts => self.hosts_key(key),
             },
@@ -578,6 +639,7 @@ impl App {
     fn on_modal_key(&mut self, modal: Modal, key: KeyEvent) {
         match modal {
             Modal::Help => {}
+            Modal::Picker(picker) => self.picker_key(picker, key),
             Modal::Editor(mut editor) => match editor.handle(key) {
                 EditorEvent::Save => self.save_editor(editor),
                 EditorEvent::Cancel => {}
@@ -610,6 +672,19 @@ impl App {
     fn submit_form(&mut self, form: Form<FormKind>) {
         match form.kind.clone() {
             FormKind::Pair { .. } => self.submit_pair(form),
+            FormKind::ConfigValue { key } => {
+                let value = form.fields[0].input.value.clone();
+                if let Err(e) = self.set_config_value(&key, value) {
+                    self.toast(e, ToastKind::Error);
+                    self.modal = Some(Modal::Form(form));
+                }
+            }
+            FormKind::ConfigSearch => {
+                self.config.search = Some(form.value(0).to_owned()).filter(|s| !s.is_empty());
+                self.config.field = 0;
+                // Results are settings, so focus that pane.
+                self.focus = 2;
+            }
             FormKind::LogSearch => {
                 self.logs.search = Some(form.value(0).to_owned()).filter(|s| !s.is_empty());
                 if self.logs.search.is_some() && !self.logs.find(true) && !self.logs.find(false) {

@@ -10,7 +10,7 @@ use sun_control::api::types::{App as SunApp, truthy};
 
 use super::app::{Action, App, Confirm, Load, Modal, Msg, ToastKind};
 use super::app_editor::AppEditor;
-use super::ui::{ACCENT, card, muted, not_connected, row};
+use super::ui::{ACCENT, card, muted, not_connected, pane, row};
 
 pub struct AppsState {
     pub list: Load<Vec<SunApp>>,
@@ -225,7 +225,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Fill(1),
         ],
     )
-    .block(card(&title))
+    .block(pane(&title, app.focus == 1))
     .row_highlight_style(Style::new().bg(Color::Indexed(236)).fg(ACCENT))
     .highlight_symbol("› ");
     let empty = apps.is_empty();

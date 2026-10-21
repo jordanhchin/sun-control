@@ -4,11 +4,14 @@ use anyhow::{Result, bail};
 use serde_json::Value;
 
 use crate::cli::{AppsCmd, ClientsCmd, Command, ConfigCmd, HostsCmd};
+use std::collections::BTreeMap;
 use sun_control::api::types::{Client, PendingPairing};
 use sun_control::api::{ApiError, SunshineClient};
 use sun_control::connect::{ConnectOptions, connect};
+
 use sun_control::devices::format_date;
 use sun_control::profiles::{self, Host, Profiles};
+use sun_control::schema::{self, Schema};
 
 pub async fn run(cmd: Command, profiles: &mut Profiles, opts: &ConnectOptions) -> Result<()> {
     if let Command::Hosts(cmd) = cmd {
@@ -227,15 +230,23 @@ async fn config(cmd: ConfigCmd, api: &SunshineClient) -> Result<()> {
             }
         }
         ConfigCmd::Set { pairs, restart } => {
-            let mut values = api.config().await?.values;
+            let cfg = api.config().await?;
+            let tabs = Schema::load().resolve(cfg.platform.as_deref(), &cfg.values);
+            let mut values: BTreeMap<String, String> = cfg
+                .values
+                .iter()
+                .map(|(k, v)| (k.clone(), schema::as_text(v)))
+                .collect();
             for (k, v) in pairs {
                 if v.is_empty() {
                     values.remove(&k);
                 } else {
-                    values.insert(k, Value::String(v));
+                    values.insert(k, v);
                 }
             }
-            api.save_config(&values).await?;
+            // Validates values and, like the web UI, omits those equal to their default.
+            let body = schema::to_save_body(&tabs, &values).map_err(anyhow::Error::msg)?;
+            api.save_config(&body).await?;
             println!("Saved.");
             if restart {
                 api.restart().await?;
